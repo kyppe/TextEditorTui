@@ -1,0 +1,481 @@
+//! Character-index text helpers and the shared "apply marks to text"
+//! renderer used by both the entry list view and the editor view.
+//!
+//! All cursor/selection/mark positions in this app are *character*
+//! offsets (not byte offsets), which keeps insert/delete/selection math
+//! simple and correct for any valid UTF-8 text. The one simplification
+//! this makes (documented, not hidden): every character is assumed to
+//! render as one terminal column, which is wrong for wide characters
+//! like CJK or emoji. Fine for a plain-text note-taking tool; worth
+//! revisiting if that ever matters.
+
+use crate::entry::Mark;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+
+pub fn char_len(s: &str) -> usize {
+    s.chars().count()
+}
+
+fn byte_offset(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or(s.len())
+}
+
+pub fn insert_char(s: &mut String, char_idx: usize, ch: char) {
+    let b = byte_offset(s, char_idx);
+    s.insert(b, ch);
+}
+
+/// Removes the character immediately before `char_idx`. No-op at 0.
+pub fn remove_before(s: &mut String, char_idx: usize) {
+    if char_idx == 0 {
+        return;
+    }
+    let start = byte_offset(s, char_idx - 1);
+    let end = byte_offset(s, char_idx);
+    s.replace_range(start..end, "");
+}
+
+/// Background used to show the live editor selection.
+const SELECTION_BG: Color = Color::Blue;
+
+/// Character offsets at which a *soft* (wrap-induced) line break falls,
+/// for a viewport `width` columns wide. Breaks after the last space that
+/// fits when there is one, otherwise hard-breaks mid-word.
+///
+/// Both the renderer (`render_lines`) and the cursor-position math
+/// (`visual_row_col`) go through this one function, so the drawn text
+/// and the cursor can never disagree about where lines break.
+pub fn wrap_positions(text: &str, width: usize) -> Vec<usize> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut breaks = Vec::new();
+    let mut row_start = 0usize;
+    let mut last_space: Option<usize> = None;
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        if chars[i] == '\n' {
+            row_start = i + 1;
+            last_space = None;
+            i += 1;
+            continue;
+        }
+        if i - row_start + 1 > width {
+            // `chars[i]` no longer fits on this row: break before it.
+            let brk = match last_space {
+                Some(s) if s + 1 > row_start => s + 1,
+                _ => i,
+            };
+            breaks.push(brk);
+            row_start = brk;
+            last_space = None;
+            i = brk;
+            continue;
+        }
+        if chars[i] == ' ' {
+            last_space = Some(i);
+        }
+        i += 1;
+    }
+    breaks
+}
+
+/// Turns absolute-text-position `Mark` ranges (character offsets) plus
+/// the raw `text` into styled output, soft-wrapped to `width`, ready for
+/// a ratatui widget. This is the one function every renderer that shows
+/// formatted entry text goes through, so a new `MarkKind` only needs a
+/// `FORMATS` entry to render correctly everywhere.
+pub fn render_lines(text: &str, marks: &[Mark], width: usize) -> Vec<Line<'static>> {
+    render_lines_sel(text, marks, width, None)
+}
+
+/// As `render_lines`, plus a highlighted selection range — used by the
+/// editor. Selection is handled here rather than by post-processing the
+/// returned lines so that it can never fall out of step with where the
+/// text actually wrapped.
+pub fn render_lines_sel(
+    text: &str,
+    marks: &[Mark],
+    width: usize,
+    selection: Option<(usize, usize)>,
+) -> Vec<Line<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let breaks = wrap_positions(text, width);
+
+    let mut boundaries: Vec<usize> = vec![0, len];
+    for m in marks {
+        boundaries.push(m.start.min(len));
+        boundaries.push(m.end.min(len));
+    }
+    for (i, ch) in chars.iter().enumerate() {
+        if *ch == '\n' {
+            boundaries.push(i);
+            boundaries.push(i + 1);
+        }
+    }
+    boundaries.extend(&breaks);
+    if let Some((s, e)) = selection {
+        boundaries.push(s.min(len));
+        boundaries.push(e.min(len));
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut current: Vec<Span<'static>> = Vec::new();
+    let mut next_break = 0usize;
+
+    for w in boundaries.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if a >= b {
+            continue;
+        }
+        // A soft break starting exactly here ends the current visual row.
+        while next_break < breaks.len() && breaks[next_break] <= a {
+            if breaks[next_break] == a {
+                lines.push(Line::from(std::mem::take(&mut current)));
+            }
+            next_break += 1;
+        }
+
+        let segment: String = chars[a..b].iter().collect();
+        if segment == "\n" {
+            lines.push(Line::from(std::mem::take(&mut current)));
+            continue;
+        }
+
+        let mut style = Style::default();
+        for m in marks {
+            if m.start <= a && m.end >= b {
+                style = style.patch((crate::format::find_by_kind(m.kind).style)());
+            }
+        }
+        if let Some((s, e)) = selection {
+            if s <= a && e >= b && s != e {
+                style = style.bg(SELECTION_BG);
+            }
+        }
+        current.push(Span::styled(segment, style));
+    }
+    lines.push(Line::from(current));
+    lines
+}
+
+/// Visual row/column of a character offset once soft wrapping at `width`
+/// is taken into account — i.e. where the terminal cursor goes. Distinct
+/// from `row_col`, which is about *logical* lines (what `j`/`k` move
+/// between); don't mix them up.
+pub fn visual_row_col(text: &str, char_idx: usize, width: usize) -> (u16, u16) {
+    let breaks = wrap_positions(text, width);
+    let mut next_break = 0usize;
+    let mut row = 0u16;
+    let mut col = 0u16;
+
+    for (i, ch) in text.chars().enumerate() {
+        while next_break < breaks.len() && breaks[next_break] == i {
+            row += 1;
+            col = 0;
+            next_break += 1;
+        }
+        if i == char_idx {
+            return (row, col);
+        }
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    // Cursor sitting at the very end of the text: if it has just filled
+    // the last column, it belongs at the start of the next row.
+    if width > 0 && col as usize >= width {
+        row += 1;
+        col = 0;
+    }
+    (row, col)
+}
+
+/// Row/column (0-indexed) of a character offset in *logical* lines
+/// (newline-separated), ignoring soft wrapping — used for cursor motion.
+pub fn row_col(text: &str, char_idx: usize) -> (u16, u16) {
+    let mut row = 0u16;
+    let mut col = 0u16;
+    for ch in text.chars().take(char_idx) {
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (row, col)
+}
+
+/// Inverse of `row_col`: the character offset at a given row/column,
+/// clamping `col` to that row's length (used for up/down cursor motion).
+pub fn char_index_at(text: &str, row: u16, col: u16) -> usize {
+    let mut idx = 0usize;
+    for (cur_row, line) in text.split('\n').enumerate() {
+        let line_len = char_len(line);
+        if cur_row as u16 == row {
+            let c = (col as usize).min(line_len);
+            return idx + c;
+        }
+        idx += line_len + 1; // +1 for the '\n'
+    }
+    // row beyond the last line: clamp to end of text.
+    char_len(text)
+}
+
+/// Removes the character range `[start, end)`.
+pub fn remove_range(s: &mut String, start: usize, end: usize) {
+    if start >= end {
+        return;
+    }
+    let a = byte_offset(s, start);
+    let b = byte_offset(s, end);
+    s.replace_range(a..b, "");
+}
+
+// --- Vim-style motions -------------------------------------------------
+//
+// Words here are whitespace-delimited runs, i.e. Vim's `W`/`B`/`E`
+// behaviour rather than `w`/`b`/`e`'s punctuation-aware classes. For a
+// plain-text note-taking tool that's the less surprising of the two, and
+// it keeps these functions simple enough to verify at a glance.
+
+/// Start of the next word (Vim `w`).
+pub fn next_word_start(text: &str, cursor: usize) -> usize {
+    let c: Vec<char> = text.chars().collect();
+    let n = c.len();
+    let mut i = cursor.min(n);
+    while i < n && !c[i].is_whitespace() {
+        i += 1;
+    }
+    while i < n && c[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+/// Start of the previous word (Vim `b`).
+pub fn prev_word_start(text: &str, cursor: usize) -> usize {
+    let c: Vec<char> = text.chars().collect();
+    let mut i = cursor.min(c.len());
+    if i == 0 {
+        return 0;
+    }
+    i -= 1;
+    while i > 0 && c[i].is_whitespace() {
+        i -= 1;
+    }
+    while i > 0 && !c[i - 1].is_whitespace() {
+        i -= 1;
+    }
+    i
+}
+
+/// Last character of the current or next word (Vim `e`).
+pub fn word_end(text: &str, cursor: usize) -> usize {
+    let c: Vec<char> = text.chars().collect();
+    let n = c.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut i = (cursor + 1).min(n.saturating_sub(1));
+    while i < n && c[i].is_whitespace() {
+        i += 1;
+    }
+    while i + 1 < n && !c[i + 1].is_whitespace() {
+        i += 1;
+    }
+    i.min(n.saturating_sub(1))
+}
+
+/// First non-whitespace character of the cursor's line (Vim `^`).
+pub fn first_non_blank(text: &str, cursor: usize) -> usize {
+    let (start, end) = line_bounds(text, cursor);
+    let c: Vec<char> = text.chars().collect();
+    let mut i = start;
+    while i < end && c[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+/// Character range `[start, end)` of the logical line containing `cursor`,
+/// excluding its trailing newline.
+pub fn line_bounds(text: &str, cursor: usize) -> (usize, usize) {
+    let c: Vec<char> = text.chars().collect();
+    let n = c.len();
+    let cursor = cursor.min(n);
+    let mut start = cursor;
+    while start > 0 && c[start - 1] != '\n' {
+        start -= 1;
+    }
+    let mut end = cursor;
+    while end < n && c[end] != '\n' {
+        end += 1;
+    }
+    (start, end)
+}
+
+/// Character offset of the start of the last logical line (Vim `G`).
+pub fn last_line_start(text: &str) -> usize {
+    let n = char_len(text);
+    line_bounds(text, n).0
+}
+
+/// Length, in characters, of the line containing `char_idx`.
+pub fn current_line_len(text: &str, char_idx: usize) -> usize {
+    let (row, _) = row_col(text, char_idx);
+    text.split('\n')
+        .nth(row as usize)
+        .map(char_len)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entry::MarkKind;
+
+    #[test]
+    fn insert_and_remove_are_char_index_safe_with_unicode() {
+        let mut s = String::from("café");
+        insert_char(&mut s, 4, '!'); // after the 'é'
+        assert_eq!(s, "café!");
+        remove_before(&mut s, 4); // removes the 'é'
+        assert_eq!(s, "caf!");
+    }
+
+    #[test]
+    fn render_lines_splits_on_newlines_and_applies_marks() {
+        let text = "hello\nworld";
+        let marks = vec![Mark {
+            start: 0,
+            end: 5,
+            kind: MarkKind::Italic,
+        }];
+        let lines = render_lines(text, &marks, 80);
+        assert_eq!(lines.len(), 2);
+        // The mark must actually reach the rendered span, not just split.
+        assert!(lines[0].spans[0]
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::ITALIC));
+        assert!(!lines[1].spans[0]
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::ITALIC));
+    }
+
+    #[test]
+    fn long_text_soft_wraps_at_word_boundaries() {
+        // 3 rows at width 10: "aaa bbb", "ccc ddd", "eee"
+        let lines = render_lines("aaa bbb ccc ddd eee", &[], 10);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(rendered, vec!["aaa bbb ", "ccc ddd ", "eee"]);
+    }
+
+    #[test]
+    fn unbroken_word_longer_than_width_hard_wraps() {
+        let lines = render_lines("abcdefghij", &[], 4);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(rendered, vec!["abcd", "efgh", "ij"]);
+    }
+
+    /// The renderer and the cursor must agree on every wrap point, or the
+    /// cursor drifts away from the text as you type. This checks them
+    /// against each other across a whole buffer rather than spot-checking.
+    #[test]
+    fn cursor_position_agrees_with_rendered_wrapping() {
+        let text = "hello world this is a long line\nshort\n\nanother fairly long line here";
+        let width = 12;
+        let lines = render_lines(text, &[], width);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+
+        for (idx, _) in text.char_indices() {
+            let cidx = text[..idx].chars().count();
+            let (row, col) = visual_row_col(text, cidx, width);
+            let row = row as usize;
+            assert!(row < rendered.len(), "row {row} out of range at char {cidx}");
+            assert!(
+                col as usize <= rendered[row].chars().count(),
+                "col {col} past end of row {row} ({:?}) at char {cidx}",
+                rendered[row]
+            );
+            // The character at the cursor must be the one the renderer
+            // placed at that row/col (newlines occupy no cell).
+            let ch = text.chars().nth(cidx).unwrap();
+            if ch != '\n' {
+                assert_eq!(
+                    rendered[row].chars().nth(col as usize),
+                    Some(ch),
+                    "char {cidx} ({ch:?}) expected at row {row} col {col} of {:?}",
+                    rendered[row]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn word_motions_step_between_whitespace_delimited_words() {
+        let t = "alpha beta  gamma";
+        //       0     6     12
+        assert_eq!(next_word_start(t, 0), 6);
+        assert_eq!(next_word_start(t, 6), 12);
+        assert_eq!(next_word_start(t, 12), t.len()); // past the last word
+        assert_eq!(prev_word_start(t, 17), 12);
+        assert_eq!(prev_word_start(t, 12), 6);
+        assert_eq!(prev_word_start(t, 6), 0);
+        assert_eq!(prev_word_start(t, 0), 0);
+        assert_eq!(word_end(t, 0), 4); // 'a' of alpha
+        assert_eq!(word_end(t, 6), 9); // 'a' of beta
+    }
+
+    #[test]
+    fn line_helpers_find_bounds_and_blanks() {
+        let t = "one\n   two\nthree";
+        assert_eq!(line_bounds(t, 0), (0, 3));
+        assert_eq!(line_bounds(t, 5), (4, 10));
+        assert_eq!(first_non_blank(t, 4), 7); // skips the 3 spaces
+        assert_eq!(last_line_start(t), 11);
+    }
+
+    #[test]
+    fn remove_range_is_char_indexed() {
+        let mut s = String::from("héllo wörld");
+        remove_range(&mut s, 0, 6);
+        assert_eq!(s, "wörld");
+    }
+
+    #[test]
+    fn selection_is_highlighted_across_a_wrap() {
+        let lines = render_lines_sel("aaa bbb ccc", &[], 4, Some((2, 9)));
+        let highlighted: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .filter(|s| s.style.bg == Some(SELECTION_BG))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(highlighted, "a bbb c");
+    }
+}
