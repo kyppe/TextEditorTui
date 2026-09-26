@@ -11,19 +11,35 @@ save. There is no background daemon and no network access.
 
 ## Installation
 
-You need the Rust toolchain (`rustc`/`cargo`) — install it with
-[rustup](https://rustup.rs) or your OS package manager.
+**Prebuilt binary (Linux x86_64)** — download the latest tarball from the
+[Releases page](../../releases/latest):
+
+```bash
+tar -xzf textpoppup-*-x86_64-linux.tar.gz
+cd textpoppup-*-x86_64-linux
+install -Dm755 textpoppup ~/.local/bin/textpoppup
+```
+
+**From source** — needs the Rust toolchain ([rustup](https://rustup.rs) or
+your package manager):
+
+```bash
+./install.sh            # builds --release, installs to ~/.local/bin
+```
+
+or by hand:
 
 ```bash
 cargo build --release
-```
-
-The binary is at `target/release/textpoppup`. Put it on your `PATH`,
-e.g.:
-
-```bash
 install -Dm755 target/release/textpoppup ~/.local/bin/textpoppup
 ```
+
+Optionally install a clipboard tool so yank/paste is shared with other
+applications: `wl-clipboard` on Wayland, `xclip` or `xsel` on X11.
+
+📖 **[INSTALL.md](INSTALL.md)** has the full walkthrough: hotkey setup for
+Hyprland / sway / i3 / GNOME / KDE / macOS, floating-popup window rules,
+backups, uninstall, and troubleshooting.
 
 ## Running
 
@@ -36,18 +52,23 @@ the app for a keybinding/command cheat sheet at any time.
 
 ### Wiring it to a hotkey
 
-TextPoppup is a terminal app, so a system-wide hotkey has to be bound
-by your window manager or desktop environment to *open a terminal
-running textpoppup*, not by the app itself. Examples:
+TextPoppup is a terminal app, so a system-wide hotkey is bound by your
+window manager or desktop, launching a terminal that runs `textpoppup`.
+This binding opens it on first press and dismisses it on second press:
 
-- **sway / i3**: in your config, `bindsym $mod+t exec alacritty -e textpoppup`
-  (swap `alacritty` for your terminal of choice).
-- **GNOME / KDE**: create a custom keyboard shortcut whose command is
-  your terminal emulator with `-e textpoppup` (flag name varies by
-  terminal, e.g. `--` for gnome-terminal, `-e` for kitty/alacritty/foot).
-- **macOS**: use an Automator "Run Shell Script" quick action bound to
-  a hotkey via System Settings, or a launcher like Raycast/Alfred
-  pointed at your terminal with the same `-e textpoppup` pattern.
+```ini
+# Hyprland — ~/.config/hypr/hyprland.conf
+bind = SUPER, N, exec, pkill -x textpoppup || kitty --class textpoppup -e textpoppup
+```
+
+```
+# sway / i3
+bindsym $mod+n exec pkill -x textpoppup || kitty --class textpoppup -e textpoppup
+```
+
+See **[INSTALL.md](INSTALL.md#configure-a-hotkey)** for GNOME, KDE, macOS,
+and for the window rules that make it a floating, centred, always-on-top
+popup rather than an ordinary terminal window.
 
 ## Basic usage
 
@@ -182,30 +203,83 @@ no way to accidentally edit an old version.
 
 **Editor**
 
+The editor opens in **NORMAL** mode, like Vim — press `i` to start typing.
 Line numbers are shown in a gutter; soft-wrapped continuation rows are
 left unnumbered, and the cursor's line number is highlighted.
 
+*Entering insert mode*
+
 | Key | Action |
 |---|---|
-| `i`, `a` | Start typing (insert / append) |
-| `I` / `A` | Start typing at line start / line end |
-| `o` / `O` | Open a new line below / above and start typing |
-| `Esc` | Stop typing → clear selection → exit editor (unsaved changes discarded) |
+| `i` / `a` | Insert before / after the cursor |
+| `I` / `A` | Insert at line start / line end |
+| `o` / `O` | Open a new line below / above |
+| `cw` / `cc` / `C` | Change word / line / to end of line |
+| `Esc` | Back to NORMAL mode |
+
+*Moving (NORMAL / VISUAL)*
+
+| Key | Action |
+|---|---|
 | `h`/`l`/`j`/`k`, arrows | Move cursor (arrows work while typing too) |
 | `w` / `b` / `e` | Next word / previous word / end of word |
-| `gg` / `G` | Start / last line of the entry |
+| `gg` / `G` | First / last line of the entry |
 | `0` / `^` / `$` | Line start / first non-blank / line end |
-| `x` | Delete the character under the cursor |
-| `dd` / `D` | Delete the line / delete to end of line |
-| `v` | Toggle selection at cursor |
-| `V` | Select the whole current line |
-| `H` | Open history for the entry being edited |
-| `Ctrl+S` | Save (new entry, or new version of an existing one) and exit |
-| `:` | Command line (selection is preserved) |
 
-Words are whitespace-delimited (Vim's `W`/`B`/`E` behaviour). **Counts and
-operator-pending combos are not implemented** — `5j`, `d3w`, `ciw` and
-friends do nothing; `dd`/`D`/`x` are the available deletions.
+*Changing text*
+
+| Key | Action |
+|---|---|
+| `x` | Delete the character under the cursor |
+| `dd` / `D` | Delete the line / to end of line |
+| `dw` / `db` / `d0` / `d$` | Delete word forward / back / to line start / to line end |
+| `r<char>` | Replace the character under the cursor |
+| `J` | Join this line with the next |
+| `Tab` / `Shift+Tab` | Indent / dedent (4 spaces) — while typing |
+| `u` / `Ctrl+r` | Undo / redo |
+
+*Yank and paste* — shared with the system clipboard, so you can copy here
+and paste in a browser, or the other way round.
+
+| Key | Action |
+|---|---|
+| `yy` / `Y` | Yank the line |
+| `y` (in VISUAL) | Yank the selection |
+| `p` / `P` | Paste after / before the cursor |
+| `Ctrl+V` | Paste while typing |
+| `d` / `x` / `c` | Also cut into the register, like Vim |
+
+*Selecting*
+
+| Key | Action |
+|---|---|
+| `v` | Start/clear a selection at the cursor (VISUAL) |
+| `V` | Select the whole current line |
+| `d` / `x` / `c` / `y` / `p` (in VISUAL) | Delete / change / yank / paste over the selection |
+
+*Saving and leaving*
+
+| Key | Action |
+|---|---|
+| `Ctrl+S`, `:wq` | Save as a new version and close |
+| `:w` | Save and keep editing |
+| `:q` / `:q!` | Close (refuses unsaved work) / close discarding changes |
+| `Esc` | Clear selection, then leave the editor (unsaved changes discarded) |
+| `H` | Open history for the entry being edited |
+| `:` | Command line |
+
+Notes on the Vim emulation, so nothing surprises you:
+
+- Words are whitespace-delimited (Vim's `W`/`B`/`E` behaviour).
+- A whole insert session is **one** undo step, as in Vim.
+- Running any `:`-command returns you to NORMAL mode (a command issued
+  from VISUAL ends the selection).
+- `Tab` inserts 4 spaces rather than a tab character, because the layout
+  engine treats one character as one column.
+- **Counts and text objects are not implemented**: `5j`, `d3w`, `ciw`,
+  `yiw`, `%`, macros, marks, registers other than the default one, and `/`
+  search all do nothing. The motions and operators listed above are the
+  complete set.
 
 **History view**
 
@@ -234,7 +308,10 @@ any other key closes it.
 | `:history [id]` | `:hist` | Open version history (current entry if `id` omitted) |
 | `:restore <n>` | | Restore version `n` as a new version |
 | `:delete` | `:d` | Delete the selected entry |
-| `:quit` | `:q` | Exit |
+| `:w` | `:write` | Save the draft as a new version, keep editing |
+| `:wq` | `:x` | Save and close the editor (quits from the journal) |
+| `:quit` | `:q` | Close the editor (refuses unsaved work), or quit the app |
+| `:q!` | `:quit!` | Close discarding changes, or quit the app |
 | `:help` | `:h` | Show the help popup |
 | `:i` / `:b` / `:u` / `:code` / `:hl` / `:head` | | Toggle italic/bold/underline/code/highlight/heading on the current selection |
 

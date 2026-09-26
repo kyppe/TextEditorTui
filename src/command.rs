@@ -86,13 +86,35 @@ pub const COMMANDS: &[CommandDef] = &[
         },
     },
     CommandDef {
-        name: "quit",
-        aliases: &["q"],
-        help: ":quit — exit TextPoppup",
+        name: "w",
+        aliases: &["write"],
+        help: ":w — save the draft as a new version, stay in the editor",
+        run: |app, _args| crate::action::write_editor(app),
+    },
+    CommandDef {
+        name: "wq",
+        aliases: &["x", "wq!"],
+        help: ":wq — save and close the editor (quits from the journal)",
         run: |app, _args| {
-            app.should_quit = true;
+            if matches!(app.mode, crate::app::Mode::Editor) {
+                crate::action::apply(app, crate::keybind::Action::EditorSaveExit);
+            } else {
+                app.should_quit = true;
+            }
             Ok(())
         },
+    },
+    CommandDef {
+        name: "quit",
+        aliases: &["q"],
+        help: ":q — close the editor (refuses unsaved work), or quit the app",
+        run: |app, _args| crate::action::quit_context(app, false),
+    },
+    CommandDef {
+        name: "q!",
+        aliases: &["quit!"],
+        help: ":q! — close the editor discarding changes, or quit the app",
+        run: |app, _args| crate::action::quit_context(app, true),
     },
     CommandDef {
         name: "help",

@@ -113,9 +113,26 @@ two slightly different behaviors.
   editor about display width, not just character count.
 
 - **`src/keybind.rs`** — `Action`, the enum naming every possible
-  user-triggered effect, and `resolve(ModeKind, KeyEvent) -> Action`,
-  the single match statement mapping keys to them per mode. This is
-  the entire keybinding table; see `FEATURES.md`.
+  user-triggered effect, and
+  `resolve(ModeKind, KeyEvent, pending) -> Action`, the single match
+  statement mapping keys to them per mode. This is the entire keybinding
+  table; see `FEATURES.md`.
+
+  The editor is three `ModeKind`s, not one — `EditorNormal`,
+  `EditorVisual`, `EditorTyping` — so "what does `d` mean" is answered by
+  the table rather than by `if` statements inside the actions. Visual
+  falls through to the normal arm for anything it doesn't override, which
+  is how motions stay defined once. `pending` carries a half-typed chord
+  (`gg`, `dd`, `cw`, `r<char>`); see FEATURES.md "Multi-key chords".
+
+- **`src/clipboard.rs`** — the yank register and the system-clipboard
+  bridge. Yanks and deletes fill both; paste prefers the system clipboard
+  when it holds something newer, so copy/paste works across applications
+  (Vim's `clipboard=unnamedplus`). It shells out to `wl-copy`/`wl-paste`,
+  `xclip`, `xsel` or `pbcopy`/`pbpaste` — whichever exists — instead of
+  linking a clipboard crate, and degrades to an in-app-only register when
+  none is installed. `Register::linewise` is what makes `dd`+`p` restore a
+  whole line while `y`-over-a-selection pastes inline.
 
 - **`src/action.rs`** — `apply(&mut App, Action)` plus the `pub fn`s it
   delegates to (`save_editor`, `open_history`, `restore_version`,

@@ -52,6 +52,27 @@ pub enum Action {
     EditorDeleteChar,
     EditorDeleteLine,
     EditorDeleteToLineEnd,
+    EditorDeleteToLineStart,
+    EditorDeleteWord,
+    EditorDeleteWordBack,
+    EditorChangeWord,
+    EditorChangeLine,
+    EditorChangeToLineEnd,
+    EditorJoinLines,
+    EditorReplaceChar(char),
+    EditorIndent,
+    EditorDedent,
+    EditorUndo,
+    EditorRedo,
+    // Yank / paste
+    EditorYankLine,
+    EditorYankSelection,
+    EditorPasteAfter,
+    EditorPasteBefore,
+    EditorDeleteSelection,
+    EditorChangeSelection,
+    EditorPasteOverSelection,
+    EditorClearSelection,
     EditorOpenLineBelow,
     EditorOpenLineAbove,
     EditorInsertAtLineStart,
@@ -103,11 +124,23 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
     // Chord completions first: they outrank the single-key meaning of the
     // same key (`d` alone deletes an entry, `dd` deletes a line).
     if let Some(first) = pending {
+        use ModeKind::{EditorNormal, EditorVisual, History, Normal};
         return match (mode, first, key.code) {
-            (ModeKind::Normal, 'g', KeyCode::Char('g')) => Action::SelectFirst,
-            (ModeKind::EditorNormal, 'g', KeyCode::Char('g')) => Action::EditorBufferStart,
-            (ModeKind::EditorNormal, 'd', KeyCode::Char('d')) => Action::EditorDeleteLine,
-            (ModeKind::History, 'g', KeyCode::Char('g')) => Action::HistoryFirst,
+            (Normal, 'g', KeyCode::Char('g')) => Action::SelectFirst,
+            (History, 'g', KeyCode::Char('g')) => Action::HistoryFirst,
+            (EditorNormal | EditorVisual, 'g', KeyCode::Char('g')) => Action::EditorBufferStart,
+            // Operators: `d`/`c` + a motion.
+            (EditorNormal, 'd', KeyCode::Char('d')) => Action::EditorDeleteLine,
+            (EditorNormal, 'd', KeyCode::Char('w')) => Action::EditorDeleteWord,
+            (EditorNormal, 'd', KeyCode::Char('b')) => Action::EditorDeleteWordBack,
+            (EditorNormal, 'd', KeyCode::Char('$')) => Action::EditorDeleteToLineEnd,
+            (EditorNormal, 'd', KeyCode::Char('0')) => Action::EditorDeleteToLineStart,
+            (EditorNormal, 'c', KeyCode::Char('c')) => Action::EditorChangeLine,
+            (EditorNormal, 'c', KeyCode::Char('w')) => Action::EditorChangeWord,
+            (EditorNormal, 'c', KeyCode::Char('$')) => Action::EditorChangeToLineEnd,
+            (EditorNormal, 'y', KeyCode::Char('y')) => Action::EditorYankLine,
+            // `r` takes whatever character comes next.
+            (EditorNormal, 'r', KeyCode::Char(c)) => Action::EditorReplaceChar(c),
             // Anything else abandons the chord and is handled afresh.
             _ => resolve(mode, key, None),
         };
@@ -151,7 +184,18 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Char('$') | KeyCode::End => Action::EditorLineEnd,
             KeyCode::Char('x') => Action::EditorDeleteChar,
             KeyCode::Char('d') => Action::SetPending('d'),
+            KeyCode::Char('c') => Action::SetPending('c'),
+            KeyCode::Char('y') => Action::SetPending('y'),
+            // Guarded arm must precede the bare `r`, or Ctrl+r never matches.
+            KeyCode::Char('r') if ctrl => Action::EditorRedo,
+            KeyCode::Char('r') => Action::SetPending('r'),
             KeyCode::Char('D') => Action::EditorDeleteToLineEnd,
+            KeyCode::Char('C') => Action::EditorChangeToLineEnd,
+            KeyCode::Char('Y') => Action::EditorYankLine,
+            KeyCode::Char('p') => Action::EditorPasteAfter,
+            KeyCode::Char('P') => Action::EditorPasteBefore,
+            KeyCode::Char('J') => Action::EditorJoinLines,
+            KeyCode::Char('u') => Action::EditorUndo,
             KeyCode::Char('v') => Action::EditorToggleSelection,
             KeyCode::Char('V') => Action::EditorSelectLine,
             KeyCode::Char('H') => Action::EditorOpenHistory,
@@ -161,15 +205,33 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             _ => Action::NoOp,
         },
 
+        // Visual mode: motions come from the normal-mode table (see the
+        // fall-through), and these keys act on the selection instead.
+        ModeKind::EditorVisual => match key.code {
+            KeyCode::Char('y') => Action::EditorYankSelection,
+            KeyCode::Char('d') | KeyCode::Char('x') => Action::EditorDeleteSelection,
+            KeyCode::Char('c') => Action::EditorChangeSelection,
+            KeyCode::Char('p') => Action::EditorPasteOverSelection,
+            KeyCode::Char('v') => Action::EditorToggleSelection,
+            KeyCode::Char('V') => Action::EditorSelectLine,
+            KeyCode::Esc => Action::EditorClearSelection,
+            KeyCode::Char(':') => Action::EnterCommand,
+            KeyCode::Char('s') if ctrl => Action::EditorSaveExit,
+            _ => resolve(ModeKind::EditorNormal, key, None),
+        },
+
         ModeKind::EditorTyping => match key.code {
             KeyCode::Esc => Action::EditorExitTyping,
             KeyCode::Enter => Action::EditorNewline,
             KeyCode::Backspace => Action::EditorBackspace,
+            KeyCode::Tab => Action::EditorIndent,
+            KeyCode::BackTab => Action::EditorDedent,
             KeyCode::Left => Action::EditorMoveLeft,
             KeyCode::Right => Action::EditorMoveRight,
             KeyCode::Up => Action::EditorMoveUp,
             KeyCode::Down => Action::EditorMoveDown,
             KeyCode::Char('s') if ctrl => Action::EditorSaveExit,
+            KeyCode::Char('v') if ctrl => Action::EditorPasteBefore,
             KeyCode::Char(c) => Action::EditorInsertChar(c),
             _ => Action::NoOp,
         },

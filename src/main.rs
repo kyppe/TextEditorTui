@@ -1,5 +1,6 @@
 mod action;
 mod app;
+mod clipboard;
 mod command;
 mod entry;
 mod format;

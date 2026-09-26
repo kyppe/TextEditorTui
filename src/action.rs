@@ -55,10 +55,10 @@ pub fn apply(app: &mut App, action: Action) {
         }
 
         // Editor, normal sub-mode
-        Action::EditorEnterTyping => app.editor.typing = true,
+        Action::EditorEnterTyping => start_typing(app),
         Action::EditorAppendTyping => {
             app.editor.cursor = (app.editor.cursor + 1).min(text::char_len(&app.editor.text));
-            app.editor.typing = true;
+            start_typing(app);
         }
         Action::EditorMoveLeft => move_left(app),
         Action::EditorMoveRight => move_right(app),
@@ -75,7 +75,7 @@ pub fn apply(app: &mut App, action: Action) {
         }
         Action::EditorToggleSelection => {
             if app.editor.selection_anchor.is_some() {
-                app.editor.selection_anchor = None;
+                app.editor.clear_selection();
                 app.set_info("Selection cleared");
             } else {
                 app.editor.selection_anchor = Some(app.editor.cursor);
@@ -104,57 +104,193 @@ pub fn apply(app: &mut App, action: Action) {
         Action::EditorDeleteChar => {
             let len = text::char_len(&app.editor.text);
             if app.editor.cursor < len {
-                delete_range(app, app.editor.cursor, app.editor.cursor + 1);
+                cut_range(app, app.editor.cursor, app.editor.cursor + 1, false);
             }
         }
         Action::EditorDeleteToLineEnd => {
             let (_, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
-            delete_range(app, app.editor.cursor, end);
+            cut_range(app, app.editor.cursor, end, false);
         }
         Action::EditorDeleteLine => {
             let (start, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
-            let len = text::char_len(&app.editor.text);
-            // Take the trailing newline with the line; on the last line take
-            // the preceding one instead, so no blank line is left behind.
-            let (from, to) = if end < len {
-                (start, end + 1)
-            } else if start > 0 {
-                (start - 1, end)
-            } else {
-                (start, end)
-            };
-            delete_range(app, from, to);
-            app.editor.cursor = from.min(text::char_len(&app.editor.text));
+            cut_lines(app, start, end);
         }
         Action::EditorOpenLineBelow => {
             let (_, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
+            start_typing(app);
             app.editor.cursor = end;
-            apply(app, Action::EditorNewline);
-            app.editor.typing = true;
+            text::insert_char(&mut app.editor.text, end, '\n');
+            shift_marks_for_insert(&mut app.editor.formatting, end, 1);
+            app.editor.cursor = end + 1;
         }
         Action::EditorOpenLineAbove => {
             let (start, _) = text::line_bounds(&app.editor.text, app.editor.cursor);
-            app.editor.cursor = start;
+            start_typing(app);
             text::insert_char(&mut app.editor.text, start, '\n');
             shift_marks_for_insert(&mut app.editor.formatting, start, 1);
             app.editor.cursor = start;
-            app.editor.typing = true;
         }
         Action::EditorInsertAtLineStart => {
             app.editor.cursor = text::first_non_blank(&app.editor.text, app.editor.cursor);
-            app.editor.typing = true;
+            start_typing(app);
         }
         Action::EditorAppendAtLineEnd => {
             let (_, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
             app.editor.cursor = end;
-            app.editor.typing = true;
+            start_typing(app);
+        }
+
+        // Vim edits: operators, yank/paste, undo
+        Action::EditorDeleteToLineStart => {
+            let (start, _) = text::line_bounds(&app.editor.text, app.editor.cursor);
+            cut_range(app, start, app.editor.cursor, false);
+        }
+        Action::EditorDeleteWord => {
+            let to = text::next_word_start(&app.editor.text, app.editor.cursor);
+            cut_range(app, app.editor.cursor, to, false);
+        }
+        Action::EditorDeleteWordBack => {
+            let to = text::prev_word_start(&app.editor.text, app.editor.cursor);
+            cut_range(app, to, app.editor.cursor, false);
+        }
+        Action::EditorChangeWord => {
+            let to = text::next_word_start(&app.editor.text, app.editor.cursor);
+            // `cw` stops at the end of the word rather than eating the space
+            // that follows, which is what Vim does.
+            let end = text::word_end(&app.editor.text, app.editor.cursor);
+            let to = to.min(end + 1);
+            cut_range(app, app.editor.cursor, to, false);
+            start_typing(app);
+        }
+        Action::EditorChangeToLineEnd => {
+            let (_, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
+            cut_range(app, app.editor.cursor, end, false);
+            start_typing(app);
+        }
+        Action::EditorChangeLine => {
+            let (start, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
+            cut_range(app, start, end, false);
+            app.editor.cursor = start;
+            start_typing(app);
+        }
+        Action::EditorJoinLines => {
+            let (_, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
+            if end < text::char_len(&app.editor.text) {
+                app.editor.push_undo();
+                // Replace the newline with a single space, Vim-style.
+                text::remove_range(&mut app.editor.text, end, end + 1);
+                shift_marks_for_delete(&mut app.editor.formatting, end, 1);
+                text::insert_char(&mut app.editor.text, end, ' ');
+                shift_marks_for_insert(&mut app.editor.formatting, end, 1);
+                app.editor.cursor = end;
+            }
+        }
+        Action::EditorReplaceChar(c) => {
+            let len = text::char_len(&app.editor.text);
+            if app.editor.cursor < len {
+                app.editor.push_undo();
+                let at = app.editor.cursor;
+                text::remove_range(&mut app.editor.text, at, at + 1);
+                text::insert_char(&mut app.editor.text, at, c);
+            }
+        }
+        Action::EditorIndent => {
+            // Spaces, not a literal tab: the whole layout/cursor model
+            // assumes one character is one column (see text.rs).
+            app.editor.push_undo();
+            for _ in 0..INDENT {
+                text::insert_char(&mut app.editor.text, app.editor.cursor, ' ');
+                shift_marks_for_insert(&mut app.editor.formatting, app.editor.cursor, 1);
+                app.editor.cursor += 1;
+            }
+        }
+        Action::EditorDedent => dedent(app),
+        Action::EditorUndo => {
+            if let Some(prev) = app.editor.undo.pop() {
+                app.editor.redo.push(app.editor.snapshot());
+                app.editor.restore(prev);
+                app.set_info("Undo");
+            } else {
+                app.set_info("Nothing to undo");
+            }
+        }
+        Action::EditorRedo => {
+            if let Some(next) = app.editor.redo.pop() {
+                app.editor.undo.push(app.editor.snapshot());
+                app.editor.restore(next);
+                app.set_info("Redo");
+            } else {
+                app.set_info("Nothing to redo");
+            }
+        }
+        Action::EditorYankLine => {
+            let (start, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
+            let line = slice(&app.editor.text, start, end);
+            crate::clipboard::yank(&mut app.register, line, true);
+            app.set_info("Yanked line");
+        }
+        Action::EditorYankSelection => {
+            if let Some((s, e)) = app.editor.selection_range() {
+                let linewise = app.editor.selection_linewise;
+                let text = slice(&app.editor.text, s, e);
+                let n = text.chars().count();
+                let lines = text.split('\n').count();
+                crate::clipboard::yank(&mut app.register, text, linewise);
+                app.editor.clear_selection();
+                app.editor.cursor = s;
+                if linewise {
+                    app.set_info(format!("Yanked {lines} line(s)"));
+                } else {
+                    app.set_info(format!("Yanked {n} characters"));
+                }
+            }
+        }
+        Action::EditorPasteAfter => paste(app, true),
+        Action::EditorPasteBefore => paste(app, false),
+        Action::EditorDeleteSelection => {
+            if let Some((s, e)) = app.editor.selection_range() {
+                // A linewise selection takes its lines out whole, newline
+                // included, rather than leaving empty lines behind.
+                if app.editor.selection_linewise {
+                    cut_lines(app, s, e);
+                } else {
+                    cut_range(app, s, e, false);
+                }
+            }
+        }
+        Action::EditorChangeSelection => {
+            if let Some((s, e)) = app.editor.selection_range() {
+                // Linewise change empties the lines but keeps one to type on
+                // (Vim's `S`), so the newline structure around it survives.
+                cut_range(app, s, e, false);
+                start_typing(app);
+            }
+        }
+        Action::EditorPasteOverSelection => {
+            if let Some((s, e)) = app.editor.selection_range() {
+                cut_range(app, s, e, false);
+                paste(app, false);
+            }
+        }
+        Action::EditorClearSelection => {
+            app.editor.clear_selection();
         }
 
         Action::EditorSelectLine => {
-            let (start, end) = text::line_bounds(&app.editor.text, app.editor.cursor);
-            app.editor.selection_anchor = Some(start);
-            app.editor.cursor = end;
-            app.set_info("Line selected — : then a format command, or :done");
+            if app.editor.selection_anchor.is_some() && app.editor.selection_linewise {
+                // `V` again leaves visual mode, as in Vim.
+                app.editor.clear_selection();
+                app.set_info("Selection cleared");
+            } else {
+                // The anchor stays where the cursor is; `selection_range`
+                // widens it to whole lines, which is what keeps j/k
+                // extending line-by-line.
+                if app.editor.selection_anchor.is_none() {
+                    app.editor.selection_anchor = Some(app.editor.cursor);
+                }
+                app.editor.selection_linewise = true;
+                app.set_info("Line selected — j/k extend, :done, or a format command");
+            }
         }
         Action::EditorSaveExit => save_editor(app),
         Action::EditorCancelExit => cancel_editor(app),
@@ -166,7 +302,9 @@ pub fn apply(app: &mut App, action: Action) {
             }
         }
 
-        // Editor, typing sub-mode
+        // Editor, typing sub-mode. No `push_undo` per keystroke: the
+        // snapshot taken when insert mode was entered covers the whole
+        // typing session, so `u` undoes what you just typed in one go.
         Action::EditorInsertChar(c) => {
             text::insert_char(&mut app.editor.text, app.editor.cursor, c);
             shift_marks_for_insert(&mut app.editor.formatting, app.editor.cursor, 1);
@@ -327,11 +465,33 @@ fn shift_marks_for_delete(formatting: &mut Formatting, at: usize, count: usize) 
     formatting.marks.retain(|m| m.end > m.start);
 }
 
+/// How many spaces `Tab` inserts in insert mode.
+const INDENT: usize = 4;
+
+/// Enters insert mode, snapshotting first so the whole typing session is a
+/// single undo step (Vim's behaviour) rather than one step per character.
+fn start_typing(app: &mut App) {
+    if !app.editor.typing {
+        app.editor.push_undo();
+        app.editor.typing = true;
+    }
+}
+
+fn slice(text: &str, start: usize, end: usize) -> String {
+    text.chars().skip(start).take(end.saturating_sub(start)).collect()
+}
+
 /// Deletes `[start, end)` from the draft, keeping marks and the cursor in
-/// step. The one place multi-character deletion happens.
-fn delete_range(app: &mut App, start: usize, end: usize) {
+/// step, recording undo, and (unless `keep_register`) yanking the removed
+/// text so `d`/`x`/`c` populate the paste register like Vim.
+fn cut_range(app: &mut App, start: usize, end: usize, keep_register: bool) {
     if start >= end {
         return;
+    }
+    app.editor.push_undo();
+    if !keep_register {
+        let cut = slice(&app.editor.text, start, end);
+        crate::clipboard::yank(&mut app.register, cut, false);
     }
     text::remove_range(&mut app.editor.text, start, end);
     shift_marks_for_delete(&mut app.editor.formatting, start, end - start);
@@ -341,13 +501,97 @@ fn delete_range(app: &mut App, start: usize, end: usize) {
     app.editor.cursor = app.editor.cursor.min(text::char_len(&app.editor.text));
     // A selection anchored into deleted text would now point at the wrong
     // characters, so drop it rather than silently mis-highlighting.
-    app.editor.selection_anchor = None;
+    app.editor.clear_selection();
+}
+
+/// Removes the whole lines spanning `[start, end)` — the line content plus
+/// the newline that terminates it — yanking them linewise so `p` puts them
+/// back as lines. Shared by `dd` and a linewise-visual delete so the two
+/// can't drift apart.
+fn cut_lines(app: &mut App, start: usize, end: usize) {
+    let len = text::char_len(&app.editor.text);
+    let lines = slice(&app.editor.text, start, end);
+    crate::clipboard::yank(&mut app.register, lines, true);
+    // Take the trailing newline with the lines; at the end of the buffer
+    // take the preceding one instead, so no blank line is left behind.
+    let (from, to) = if end < len {
+        (start, end + 1)
+    } else if start > 0 {
+        (start - 1, end)
+    } else {
+        (start, end)
+    };
+    cut_range(app, from, to, true);
+    app.editor.cursor = from.min(text::char_len(&app.editor.text));
+}
+
+/// Removes up to `INDENT` leading spaces from the cursor's line.
+fn dedent(app: &mut App) {
+    let (start, _) = text::line_bounds(&app.editor.text, app.editor.cursor);
+    let leading = app
+        .editor
+        .text
+        .chars()
+        .skip(start)
+        .take(INDENT)
+        .take_while(|c| *c == ' ')
+        .count();
+    if leading == 0 {
+        return;
+    }
+    app.editor.push_undo();
+    text::remove_range(&mut app.editor.text, start, start + leading);
+    shift_marks_for_delete(&mut app.editor.formatting, start, leading);
+    app.editor.cursor = app.editor.cursor.saturating_sub(leading).max(start);
+}
+
+/// `p` / `P`. Linewise registers open a new line the way Vim does;
+/// charwise ones drop in beside the cursor. The register is resolved
+/// against the system clipboard first, so text copied elsewhere pastes.
+fn paste(app: &mut App, after: bool) {
+    let reg = crate::clipboard::resolve_for_paste(&app.register);
+    if reg.text.is_empty() {
+        app.set_error("Nothing to paste");
+        return;
+    }
+    app.editor.push_undo();
+    let n = text::char_len(&reg.text);
+
+    if reg.linewise {
+        let (line_start, line_end) = text::line_bounds(&app.editor.text, app.editor.cursor);
+        if after {
+            let at = line_end;
+            text::insert_str(&mut app.editor.text, at, &format!("\n{}", reg.text));
+            shift_marks_for_insert(&mut app.editor.formatting, at, n + 1);
+            app.editor.cursor = at + 1;
+        } else {
+            text::insert_str(&mut app.editor.text, line_start, &format!("{}\n", reg.text));
+            shift_marks_for_insert(&mut app.editor.formatting, line_start, n + 1);
+            app.editor.cursor = line_start;
+        }
+    } else {
+        let (_, line_end) = text::line_bounds(&app.editor.text, app.editor.cursor);
+        let at = if after {
+            (app.editor.cursor + 1).min(line_end)
+        } else {
+            app.editor.cursor
+        };
+        text::insert_str(&mut app.editor.text, at, &reg.text);
+        shift_marks_for_insert(&mut app.editor.formatting, at, n);
+        // Vim leaves the cursor on the last pasted character.
+        app.editor.cursor = at + n.saturating_sub(1);
+    }
+    app.set_info(if reg.linewise {
+        "Pasted line"
+    } else {
+        "Pasted"
+    });
 }
 
 fn new_entry(app: &mut App) {
     app.editor = crate::app::EditorState::empty();
     app.mode = Mode::Editor;
-    app.set_info("New entry — Esc to stop typing, Ctrl+S to save, Esc again to exit");
+    app.set_info("New entry — press i to start typing, Ctrl+S or :wq to save");
 }
 
 fn edit_selected(app: &mut App) {
@@ -355,51 +599,28 @@ fn edit_selected(app: &mut App) {
         return;
     };
     let current = entry.current();
-    app.editor = crate::app::EditorState {
-        entry_id: Some(entry.id.clone()),
-        title: current.title.clone(),
-        text: current.text.clone(),
-        cursor: text::char_len(&current.text),
-        selection_anchor: None,
-        formatting: current.formatting.clone(),
-        typing: true,
-    };
+    // Built from `empty()` rather than a struct literal so adding a field to
+    // EditorState doesn't silently need updating in two places.
+    let mut editor = crate::app::EditorState::empty();
+    editor.entry_id = Some(entry.id.clone());
+    editor.title = current.title.clone();
+    editor.cursor = text::char_len(&current.text);
+    editor.text = current.text.clone();
+    editor.formatting = current.formatting.clone();
+    app.editor = editor;
     app.mode = Mode::Editor;
 }
 
+/// `Ctrl+S` / `:wq` — write the draft (if it changed) and leave the editor.
 fn save_editor(app: &mut App) {
-    let text = app.editor.text.clone();
-    let formatting = app.editor.formatting.clone();
-    let title = app.editor.title.clone();
-
-    if let Some(id) = app.editor.entry_id.clone() {
-        // Every part of a version counts as a change, title included -
-        // otherwise retitling alone would be silently thrown away.
-        let unchanged = app
-            .store
-            .find(&id)
-            .map(|e| {
-                let v = e.current();
-                v.text == text && v.formatting == formatting && v.title == title
-            })
-            .unwrap_or(false);
-        if !unchanged {
-            if let Some(entry) = app.store.find_mut(&id) {
-                entry.push_version(title, text, formatting);
-            }
-            app.set_info("Saved new version");
-        } else {
-            app.set_info("No changes");
-        }
-    } else if !text.trim().is_empty() || title.is_some() {
-        let id = app.store.unique_id();
-        let entry = crate::entry::Entry::new(id, title, text, formatting);
-        app.store.entries.push(entry);
-        app.selected = app.store.entries.len() - 1;
-        app.set_info("Entry saved");
+    if editor_is_dirty(app) {
+        let _ = write_editor(app);
+    } else {
+        app.set_info("No changes");
     }
-    app.save_store();
+    let message = app.status.take();
     leave_editor(app);
+    app.status = message;
 }
 
 fn cancel_editor(app: &mut App) {
@@ -408,7 +629,7 @@ fn cancel_editor(app: &mut App) {
         return;
     }
     if app.editor.selection_anchor.is_some() {
-        app.editor.selection_anchor = None;
+        app.editor.clear_selection();
         app.set_info("Selection cleared — Esc again to exit without saving");
         return;
     }
@@ -477,6 +698,80 @@ fn submit_command(app: &mut App) {
             app.set_error(e);
         }
     }
+    // Running an ex-command drops you back to NORMAL, like Vim: a command
+    // issued from VISUAL ends the selection rather than leaving it live.
+    if matches!(app.mode, Mode::Editor) {
+        app.editor.typing = false;
+        app.editor.clear_selection();
+    }
+}
+
+/// Whether the draft differs from what's stored — what `:q` refuses on and
+/// `Ctrl+S` checks before adding a version.
+pub fn editor_is_dirty(app: &App) -> bool {
+    match &app.editor.entry_id {
+        Some(id) => app
+            .store
+            .find(id)
+            .map(|e| {
+                let v = e.current();
+                v.text != app.editor.text
+                    || v.formatting != app.editor.formatting
+                    || v.title != app.editor.title
+            })
+            .unwrap_or(true),
+        None => !app.editor.text.trim().is_empty() || app.editor.title.is_some(),
+    }
+}
+
+/// `:w` — save the draft as a new version and stay in the editor.
+pub fn write_editor(app: &mut App) -> Result<(), String> {
+    if !matches!(app.mode, Mode::Editor) {
+        return Err("`:w` only works while editing an entry (entries are saved already)".into());
+    }
+    if !editor_is_dirty(app) {
+        app.set_info("No changes");
+        return Ok(());
+    }
+    let title = app.editor.title.clone();
+    let text = app.editor.text.clone();
+    let formatting = app.editor.formatting.clone();
+
+    match app.editor.entry_id.clone() {
+        Some(id) => {
+            if let Some(entry) = app.store.find_mut(&id) {
+                entry.push_version(title, text, formatting);
+            }
+            app.set_info("Saved new version");
+        }
+        None => {
+            let id = app.store.unique_id();
+            let entry = crate::entry::Entry::new(id.clone(), title, text, formatting);
+            app.store.entries.push(entry);
+            app.selected = app.store.entries.len() - 1;
+            // Keep editing the entry that now exists, so a later `:w` adds a
+            // version to it instead of creating a second entry.
+            app.editor.entry_id = Some(id);
+            app.set_info("Entry saved");
+        }
+    }
+    app.save_store();
+    Ok(())
+}
+
+/// `:q` — leave the editor, or quit the app from anywhere else. Refuses to
+/// discard unsaved work unless `force` (`:q!`).
+pub fn quit_context(app: &mut App, force: bool) -> Result<(), String> {
+    if matches!(app.mode, Mode::Editor) {
+        if !force && editor_is_dirty(app) {
+            return Err("Unsaved changes — `:wq` to save and close, `:q!` to discard".into());
+        }
+        leave_editor(app);
+        app.set_info("Closed without saving");
+        return Ok(());
+    }
+    app.should_quit = true;
+    Ok(())
 }
 
 pub fn open_history_selected(app: &mut App) {

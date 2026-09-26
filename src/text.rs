@@ -29,6 +29,11 @@ pub fn insert_char(s: &mut String, char_idx: usize, ch: char) {
     s.insert(b, ch);
 }
 
+pub fn insert_str(s: &mut String, char_idx: usize, text: &str) {
+    let b = byte_offset(s, char_idx);
+    s.insert_str(b, text);
+}
+
 /// Removes the character immediately before `char_idx`. No-op at 0.
 pub fn remove_before(s: &mut String, char_idx: usize) {
     if char_idx == 0 {

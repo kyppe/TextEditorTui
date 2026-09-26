@@ -1,0 +1,73 @@
+name: Release
+
+# Publishes a prebuilt Linux binary whenever you push a version tag:
+#
+#     git tag v0.1.0 && git push origin v0.1.0
+#
+# The tarball lands on the GitHub Releases page, which is what INSTALL.md
+# tells people to download. Run it by hand from the Actions tab too, if you
+# want to test the build without tagging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ -n "$VERSION" ] || VERSION="dev"
+          DIR="textpoppup-${VERSION}-x86_64-linux"
+          mkdir -p "dist/$DIR"
+          cp target/release/textpoppup "dist/$DIR/"
+          cp README.md INSTALL.md FEATURES.md ARCHITECTURE.md "dist/$DIR/"
+          tar -C dist -czf "dist/${DIR}.tar.gz" "$DIR"
+          (cd dist && sha256sum "${DIR}.tar.gz" > "${DIR}.tar.gz.sha256")
+          ls -la dist
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          body: |
+            Prebuilt binary for x86_64 Linux.
+
+            Download the tarball, extract it, and put `textpoppup` on your
+            `PATH` — see INSTALL.md for the hotkey setup. Or build from
+            source with `cargo build --release`.
+          generate_release_notes: true
+
+      - name: Upload as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: textpoppup-x86_64-linux
+          path: dist/*.tar.gz

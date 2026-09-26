@@ -125,11 +125,11 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             Mode::Normal => "j/k gg/G move · i edit · n new · t title · d delete · H history · ? help",
             Mode::Editor => {
                 if app.editor.typing {
-                    "Esc: stop typing · Ctrl+S: save & exit"
+                    "Esc: normal mode · Tab: indent · Ctrl+S: save & exit"
                 } else if app.editor.selection_anchor.is_some() {
-                    ":done · :i :b :u :head · v clears selection"
+                    "y yank · d/x cut · c change · p paste over · :done · Esc"
                 } else {
-                    "hjkl w b e gg G · x dd D · o O I A · v/V select · :done · Ctrl+S"
+                    "i a o O · w b e gg G · x dd dw cw D C · yy p P · u Ctrl+r · :w :wq :q"
                 }
             }
             Mode::History { .. } => {

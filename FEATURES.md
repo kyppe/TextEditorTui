@@ -152,6 +152,14 @@ for the first key, then match the completion at the top of `resolve`:
 any other action, so an abandoned chord (`g` then `$`) just runs the second
 key normally. Don't add a second pending-state mechanism elsewhere.
 
+**Editing the draft? Snapshot first.** Any action that changes the draft
+calls `app.editor.push_undo()` before mutating, which is what makes `u` /
+`Ctrl+r` work. The exception is typing: `start_typing` snapshots once when
+insert mode is entered and the per-character actions don't, so a whole
+insert session undoes in one step like Vim. Route deletions through
+`cut_range`, which handles undo, mark re-anchoring and the yank register
+together — don't hand-roll a `remove_range` call.
+
 **Counts (`5j`, `d3w`) are deliberately not implemented.** Adding them
 means an accumulator plus an operator-pending model threaded through every
 motion — a real change, not a tweak. Plan for that rather than bolting a
