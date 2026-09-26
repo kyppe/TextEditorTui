@@ -47,11 +47,21 @@ a `pub fn` in `src/action.rs` instead (see "Add a new editor action"
 below) and have `run` call it — that keeps `command.rs` a thin table
 and makes the logic reusable from a keybinding too.
 
-**Applying a mark over a range?** Use `Formatting::set` / `clear` /
-`covers` (`src/entry.rs`) rather than pushing onto `marks` directly —
-they merge, trim and split overlapping runs, so repeating a command is
-idempotent. `action::set_done` (`:done`/`:undone`) is the worked example;
-`toggle_format` is the older exact-range toggle used by `:i` and friends.
+**Applying a mark over a range?** Two rules:
+
+1. Get the ranges from `action::target_spans`, never from the raw selection.
+   It resolves "selection, else the cursor's line" and then splits the range
+   per line and trims each to its first/last non-whitespace character
+   (`text::trimmed_line_spans`), which is what keeps effects off
+   indentation and trailing spaces.
+2. Apply them with `Formatting::set` / `clear` / `covers`
+   (`src/entry.rs`), not by pushing onto `marks` directly — they merge,
+   trim and split overlapping runs, so repeating a command is idempotent.
+
+Both `toggle_format` and `set_done` follow this; copy either. Note the
+consequence for toggling: a stored mark is *narrower* than the range the
+user selected, so decide "is it already applied?" with `covers`, never by
+comparing ranges for equality.
 
 **If the command only makes sense in one mode, guard it.** Commands can be
 typed from anywhere, so check `app.mode` and return an `Err` rather than

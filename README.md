@@ -126,6 +126,18 @@ fix the sink
 Like all formatting, this lives on the draft until `Ctrl+S` saves it as a
 new version.
 
+**Blank space never gets marked.** Every effect runs from the first word to
+the last, so indentation and trailing spaces stay clean — a strikethrough
+or underline on an indented line doesn't drag a line through the empty
+margin:
+
+```
+    b̶u̶y̶ ̶m̶i̶l̶k̶          ← :done on "    buy milk   "
+```
+
+Over a multi-line selection each line is handled separately, so the gap
+between lines isn't marked either.
+
 ### Formatting text
 
 While editing an entry, press `Esc` to leave typing mode, move the
@@ -275,7 +287,8 @@ Notes on the Vim emulation, so nothing surprises you:
 - Running any `:`-command returns you to NORMAL mode (a command issued
   from VISUAL ends the selection).
 - `Tab` inserts 4 spaces rather than a tab character, because the layout
-  engine treats one character as one column.
+  engine treats one character as one column. A tab that arrives by paste is
+  kept in the text but *displayed* as a single space, for the same reason.
 - **Counts and text objects are not implemented**: `5j`, `d3w`, `ciw`,
   `yiw`, `%`, macros, marks, registers other than the default one, and `/`
   search all do nothing. The motions and operators listed above are the

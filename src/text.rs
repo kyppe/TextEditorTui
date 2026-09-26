@@ -150,8 +150,17 @@ pub fn render_lines_sel(
             next_break += 1;
         }
 
-        let segment: String = chars[a..b].iter().collect();
-        if segment == "\n" {
+        // A literal tab would make the terminal jump to its next tab stop,
+        // breaking the one-character-one-column rule that the wrap points,
+        // the cursor and the mark offsets are all computed against — text
+        // pasted in from elsewhere really does contain them. Displaying it
+        // as a single space keeps every offset honest; the stored text is
+        // untouched, so yanking or saving still round-trips the real tab.
+        let segment: String = chars[a..b]
+            .iter()
+            .map(|c| if *c == '\t' { ' ' } else { *c })
+            .collect();
+        if chars[a..b] == ['\n'] {
             lines.push(Line::from(std::mem::take(&mut current)));
             continue;
         }
@@ -333,6 +342,50 @@ pub fn line_bounds(text: &str, cursor: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// Splits `[start, end)` into one sub-range per line, each shrunk to its
+/// first and last non-whitespace character.
+///
+/// This is what keeps a mark off the blank space around the words: an
+/// underline or strikethrough applied to an indented line starts at the
+/// first word and stops at the last, instead of drawing a line through the
+/// indentation and the trailing spaces. Splitting per line matters for a
+/// multi-line selection, where the whitespace to skip sits in the middle of
+/// the range (the end of one line, the indentation of the next).
+///
+/// Lines that hold nothing but whitespace contribute no range, so a
+/// selection of pure whitespace yields an empty result.
+pub fn trimmed_line_spans(text: &str, start: usize, end: usize) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let end = end.min(chars.len());
+    if start >= end {
+        return Vec::new();
+    }
+
+    let mut spans = Vec::new();
+    let mut line_start = start;
+    let mut i = start;
+    // `<= end` so the final (unterminated) segment is flushed by the same code.
+    while i <= end {
+        let at_break = i == end || chars[i] == '\n';
+        if at_break {
+            let mut a = line_start;
+            let mut b = i;
+            while a < b && chars[a].is_whitespace() {
+                a += 1;
+            }
+            while b > a && chars[b - 1].is_whitespace() {
+                b -= 1;
+            }
+            if a < b {
+                spans.push((a, b));
+            }
+            line_start = i + 1;
+        }
+        i += 1;
+    }
+    spans
+}
+
 /// Character offset of the start of the last logical line (Vim `G`).
 pub fn last_line_start(text: &str) -> usize {
     let n = char_len(text);
@@ -463,6 +516,60 @@ mod tests {
         assert_eq!(line_bounds(t, 5), (4, 10));
         assert_eq!(first_non_blank(t, 4), 7); // skips the 3 spaces
         assert_eq!(last_line_start(t), 11);
+    }
+
+    /// A literal tab must never reach the terminal, or it jumps to the next
+    /// tab stop and every column after it is wrong.
+    #[test]
+    fn tabs_render_as_a_single_space_so_columns_stay_honest() {
+        let lines = render_lines("a\tb\tc", &[], 80);
+        let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(rendered, "a b c");
+        assert!(!rendered.contains('\t'));
+        // One column per character, so the cursor maths still lines up.
+        assert_eq!(rendered.chars().count(), char_len("a\tb\tc"));
+    }
+
+    #[test]
+    fn trimmed_spans_skip_indentation_and_trailing_space() {
+        let t = "    buy milk   ";
+        // Whole line selected -> only "buy milk" (chars 4..12).
+        assert_eq!(trimmed_line_spans(t, 0, t.len()), vec![(4, 12)]);
+        // Interior space between words stays inside the span.
+        assert_eq!(&t[4..12], "buy milk");
+    }
+
+    #[test]
+    fn trimmed_spans_are_per_line_for_a_multi_line_range() {
+        let t = "  first\n\tsecond  \n   third";
+        let spans = trimmed_line_spans(t, 0, char_len(t));
+        let words: Vec<String> = spans
+            .iter()
+            .map(|(a, b)| t.chars().skip(*a).take(b - a).collect())
+            .collect();
+        assert_eq!(words, vec!["first", "second", "third"]);
+    }
+
+    #[test]
+    fn trimmed_spans_ignore_blank_and_whitespace_only_lines() {
+        let t = "one\n\n    \ntwo";
+        let spans = trimmed_line_spans(t, 0, char_len(t));
+        let words: Vec<String> = spans
+            .iter()
+            .map(|(a, b)| t.chars().skip(*a).take(b - a).collect())
+            .collect();
+        assert_eq!(words, vec!["one", "two"]);
+        // Pure whitespace yields nothing at all.
+        assert!(trimmed_line_spans("   ", 0, 3).is_empty());
+        assert!(trimmed_line_spans("", 0, 0).is_empty());
+    }
+
+    #[test]
+    fn trimmed_spans_respect_a_partial_range() {
+        let t = "alpha beta gamma";
+        // Selecting " beta " mid-line trims to just "beta".
+        assert_eq!(trimmed_line_spans(t, 5, 11), vec![(6, 10)]);
+        assert_eq!(&t[6..10], "beta");
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! See FEATURES.md "Add a new editor action" before adding a variant.
 
 use crate::app::{App, ConfirmAction, Mode};
-use crate::entry::{Formatting, Mark, MarkKind};
+use crate::entry::{Formatting, MarkKind};
 use crate::keybind::Action;
 use crate::text;
 
@@ -956,31 +956,41 @@ pub fn set_done(app: &mut App, done: bool) -> Result<(), String> {
     if !matches!(app.mode, Mode::Editor) {
         return Err("`:done` only works while editing an entry".into());
     }
+    let spans = target_spans(app)?;
+    let already = spans
+        .iter()
+        .all(|(s, e)| app.editor.formatting.covers(*s, *e, MarkKind::Strikethrough));
+    for (s, e) in &spans {
+        if done {
+            app.editor.formatting.set(*s, *e, MarkKind::Strikethrough);
+        } else {
+            app.editor.formatting.clear(*s, *e, MarkKind::Strikethrough);
+        }
+    }
+    if done && already {
+        app.set_info("Already done");
+    } else if done {
+        app.set_info("Marked done — Ctrl+S to save");
+    } else {
+        app.set_info("Marked not done — Ctrl+S to save");
+    }
+    Ok(())
+}
+
+/// The ranges a formatting command should act on: the selection if there is
+/// one, otherwise the cursor's line — split per line and trimmed to the
+/// words, so blank space never carries a mark. See
+/// `text::trimmed_line_spans`.
+fn target_spans(app: &App) -> Result<Vec<(usize, usize)>, String> {
     let (start, end) = match app.editor.selection_range() {
         Some((s, e)) if s != e => (s, e),
         _ => text::line_bounds(&app.editor.text, app.editor.cursor),
     };
-    if start == end {
-        return Err("Nothing on this line to mark".into());
+    let spans = text::trimmed_line_spans(&app.editor.text, start, end);
+    if spans.is_empty() {
+        return Err("Nothing but blank space there — no text to mark".into());
     }
-    let already = app
-        .editor
-        .formatting
-        .covers(start, end, MarkKind::Strikethrough);
-    if done {
-        app.editor.formatting.set(start, end, MarkKind::Strikethrough);
-        if already {
-            app.set_info("Already done");
-        } else {
-            app.set_info("Marked done — Ctrl+S to save");
-        }
-    } else {
-        app.editor
-            .formatting
-            .clear(start, end, MarkKind::Strikethrough);
-        app.set_info("Marked not done — Ctrl+S to save");
-    }
-    Ok(())
+    Ok(spans)
 }
 
 /// Toggles a formatting mark over the current editor selection. If an
@@ -993,25 +1003,31 @@ pub fn toggle_format(app: &mut App, kind: MarkKind) -> Result<(), String> {
     if !matches!(app.mode, Mode::Editor) {
         return Err("Formatting only works while editing an entry".into());
     }
-    let Some((start, end)) = app.editor.selection_range() else {
-        return Err("Select text first (press v), then run the format command".into());
-    };
-    if start == end {
-        return Err("Selection is empty".into());
+    if app.editor.selection_range().is_none() {
+        return Err("Select text first (press v or V), then run the format command".into());
     }
-    let marks = &mut app.editor.formatting.marks;
-    if let Some(pos) = marks
+    // Trimmed, per-line ranges: the mark lands on the words, never on the
+    // indentation or the trailing spaces around them.
+    let spans = target_spans(app)?;
+
+    // Toggle on whether the words are *already* marked, rather than on an
+    // exact range match — otherwise turning a mark off would only work when
+    // you reselected byte-for-byte the same range you applied it with.
+    let already = spans
         .iter()
-        .position(|m| m.kind == kind && m.start == start && m.end == end)
-    {
-        marks.remove(pos);
-        app.set_info(format!(
-            "Removed {}",
-            crate::format::find_by_kind(kind).name
-        ));
+        .all(|(s, e)| app.editor.formatting.covers(*s, *e, kind));
+    for (s, e) in &spans {
+        if already {
+            app.editor.formatting.clear(*s, *e, kind);
+        } else {
+            app.editor.formatting.set(*s, *e, kind);
+        }
+    }
+    let name = crate::format::find_by_kind(kind).name;
+    if already {
+        app.set_info(format!("Removed {name}"));
     } else {
-        marks.push(Mark { start, end, kind });
-        app.set_info(format!("Applied {}", crate::format::find_by_kind(kind).name));
+        app.set_info(format!("Applied {name}"));
     }
     Ok(())
 }

@@ -105,6 +105,18 @@ two slightly different behaviors.
   **visual** rows after wrapping (where the cursor is drawn). Don't
   substitute one for the other.
 
+  **One character is one terminal column.** Everything above depends on it,
+  so `render_lines` substitutes a space for any literal tab: left alone, the
+  terminal would jump to its next tab stop and every column after it —
+  wrap points, cursor, mark boundaries — would be off. `Tab` in insert mode
+  inserts spaces for the same reason. The stored text keeps whatever it had,
+  so nothing is rewritten behind the user's back.
+
+  `trimmed_line_spans` is the other half of that: it turns a selected range
+  into per-line, whitespace-trimmed ranges so a mark covers words rather
+  than the blank margin around them. Mark-applying actions go through
+  `action::target_spans`, which wraps it.
+
   Positions are **character offsets**, not byte offsets — chosen so
   cursor/selection/mark arithmetic can't produce a UTF-8 boundary panic.
   The one thing this doesn't handle is wide characters (CJK, emoji)
