@@ -45,8 +45,8 @@ Needs the Rust toolchain ([rustup](https://rustup.rs) or your package
 manager; on Arch: `sudo pacman -S rust`).
 
 ```bash
-git clone <this-repo> textpoppup
-cd textpoppup
+git clone https://github.com/kyppe/TextEditorTui.git
+cd TextEditorTui
 ./install.sh          # builds --release and installs to ~/.local/bin
 ```
 
