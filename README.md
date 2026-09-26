@@ -82,6 +82,11 @@ which keys are live: `JOURNAL` (browsing the list), `NORMAL` / `INSERT` /
 `CONFIRM`. The rest of that line is a hint for the current mode, or the
 last status message.
 
+The **cursor shape** follows suit, like Vim: a thin bar while you're typing
+in INSERT, a solid block otherwise. NORMAL and VISUAL share the block — the
+shape tells you whether you're typing, the badge names the exact mode. Your
+shell's own cursor is restored when TextPoppup exits.
+
 - Press `n` to write a new entry. Type, then `Ctrl+S` to save.
 - Press `j`/`k` (or arrows) to move between entries, `i`/`Enter` to
   edit the selected one — editing never overwrites the old text, it
@@ -203,7 +208,8 @@ no way to accidentally edit an old version.
 | Key | Action |
 |---|---|
 | `j`/`k`, `↑`/`↓` | Move selection |
-| `gg` / `G` | Jump to first / last entry |
+| `gg` / `G`, `Home` / `End` | Jump to first / last entry |
+| `Page Up` / `Page Down` | Move 5 entries |
 | `n`, `o` | New entry |
 | `i`, `Enter` | Edit selected entry |
 | `t` | Title / retitle selected entry (popup) |
@@ -233,10 +239,27 @@ left unnumbered, and the cursor's line number is highlighted.
 
 | Key | Action |
 |---|---|
-| `h`/`l`/`j`/`k`, arrows | Move cursor (arrows work while typing too) |
+| `h`/`l`/`j`/`k` | Move cursor |
 | `w` / `b` / `e` | Next word / previous word / end of word |
 | `gg` / `G` | First / last line of the entry |
 | `0` / `^` / `$` | Line start / first non-blank / line end |
+
+*Ordinary keyboard keys* — these work in **every** editor mode, including
+while you're typing, so you don't have to leave insert mode to jump around:
+
+| Key | Action |
+|---|---|
+| arrows | Move cursor |
+| `Home` / `End` (`Orig` / `Fin`) | Line start / line end |
+| `Ctrl+Home` / `Ctrl+End` | Start / end of the whole entry |
+| `Ctrl+←` / `Ctrl+→` | Previous / next word |
+| `Page Up` / `Page Down` | Move a screenful |
+| `Delete` | Delete the character under the cursor |
+| `Ctrl+W` | Delete the word before the cursor |
+| `Ctrl+V` | Paste |
+
+`Delete`, `Backspace` and `Ctrl+W` leave the yank register alone, so ordinary
+typing never overwrites what you copied — only Vim's `x`/`d`/`c`/`y` fill it.
 
 *Changing text*
 
@@ -299,7 +322,8 @@ Notes on the Vim emulation, so nothing surprises you:
 | Key | Action |
 |---|---|
 | `h`/`l`, `←`/`→`, `Tab`/`Shift+Tab` | Switch version |
-| `gg` / `G` | Jump to first / latest version |
+| `gg` / `G`, `Home` / `End` | Jump to first / latest version |
+| `Page Up` / `Page Down` | Previous / next version |
 | `Ctrl+1`–`Ctrl+9` | Jump to version 1–9 (terminal-dependent, see above) |
 | mouse click on a tab | Jump to that version |
 | `:` | Command line (for `:restore`) |

@@ -19,6 +19,8 @@ pub enum Action {
     SelectDown,
     SelectFirst,
     SelectLast,
+    SelectPageUp,
+    SelectPageDown,
     NewEntry,
     EditSelected,
     DeleteSelected,
@@ -64,6 +66,12 @@ pub enum Action {
     EditorDedent,
     EditorUndo,
     EditorRedo,
+    /// Forward delete from the `Delete` key. Unlike Vim's `x`, plain
+    /// keyboard editing keys leave the yank register alone.
+    EditorDeleteForward,
+    EditorDeleteWordBackPlain,
+    EditorPageUp,
+    EditorPageDown,
     // Yank / paste
     EditorYankLine,
     EditorYankSelection,
@@ -115,11 +123,40 @@ pub enum Action {
     HelpClose,
 }
 
+/// The keys a normal keyboard offers for moving and deleting, independent of
+/// Vim's letter commands: Home/End ("Orig"/"Fin"), Page Up/Down, Delete, and
+/// the Ctrl+arrow word jumps. Shared by all three editor modes so they
+/// behave the same whether or not you're typing — `End` has to reach the end
+/// of the line in insert mode too, not just in normal mode.
+fn standard_editor_key(key: KeyEvent) -> Option<Action> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    Some(match key.code {
+        KeyCode::Home if ctrl => Action::EditorBufferStart,
+        KeyCode::End if ctrl => Action::EditorBufferEnd,
+        KeyCode::Home => Action::EditorLineStart,
+        KeyCode::End => Action::EditorLineEnd,
+        KeyCode::PageUp => Action::EditorPageUp,
+        KeyCode::PageDown => Action::EditorPageDown,
+        KeyCode::Delete => Action::EditorDeleteForward,
+        KeyCode::Backspace if ctrl => Action::EditorDeleteWordBackPlain,
+        KeyCode::Left if ctrl => Action::EditorWordBack,
+        KeyCode::Right if ctrl => Action::EditorWordForward,
+        KeyCode::Up if ctrl => Action::EditorBufferStart,
+        KeyCode::Down if ctrl => Action::EditorBufferEnd,
+        KeyCode::Left => Action::EditorMoveLeft,
+        KeyCode::Right => Action::EditorMoveRight,
+        KeyCode::Up => Action::EditorMoveUp,
+        KeyCode::Down => Action::EditorMoveDown,
+        _ => return None,
+    })
+}
+
 /// `pending` is the first key of an in-progress chord (see
 /// `Action::SetPending`), so `gg` and `dd` resolve here rather than being
 /// special-cased elsewhere.
 pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
 
     // Chord completions first: they outrank the single-key meaning of the
     // same key (`d` alone deletes an entry, `dd` deletes a line).
@@ -153,6 +190,10 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Char('k') | KeyCode::Up => Action::SelectUp,
             KeyCode::Char('g') => Action::SetPending('g'),
             KeyCode::Char('G') => Action::SelectLast,
+            KeyCode::Home => Action::SelectFirst,
+            KeyCode::End => Action::SelectLast,
+            KeyCode::PageUp => Action::SelectPageUp,
+            KeyCode::PageDown => Action::SelectPageDown,
             KeyCode::Char('n') | KeyCode::Char('o') => Action::NewEntry,
             KeyCode::Char('i') | KeyCode::Enter => Action::EditSelected,
             KeyCode::Char('d') => Action::DeleteSelected,
@@ -170,18 +211,18 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Char('A') => Action::EditorAppendAtLineEnd,
             KeyCode::Char('o') => Action::EditorOpenLineBelow,
             KeyCode::Char('O') => Action::EditorOpenLineAbove,
-            KeyCode::Char('h') | KeyCode::Left => Action::EditorMoveLeft,
-            KeyCode::Char('l') | KeyCode::Right => Action::EditorMoveRight,
-            KeyCode::Char('k') | KeyCode::Up => Action::EditorMoveUp,
-            KeyCode::Char('j') | KeyCode::Down => Action::EditorMoveDown,
+            KeyCode::Char('h') => Action::EditorMoveLeft,
+            KeyCode::Char('l') => Action::EditorMoveRight,
+            KeyCode::Char('k') => Action::EditorMoveUp,
+            KeyCode::Char('j') => Action::EditorMoveDown,
             KeyCode::Char('w') => Action::EditorWordForward,
             KeyCode::Char('b') => Action::EditorWordBack,
             KeyCode::Char('e') => Action::EditorWordEnd,
             KeyCode::Char('g') => Action::SetPending('g'),
             KeyCode::Char('G') => Action::EditorBufferEnd,
             KeyCode::Char('^') => Action::EditorFirstNonBlank,
-            KeyCode::Char('0') | KeyCode::Home => Action::EditorLineStart,
-            KeyCode::Char('$') | KeyCode::End => Action::EditorLineEnd,
+            KeyCode::Char('0') => Action::EditorLineStart,
+            KeyCode::Char('$') => Action::EditorLineEnd,
             KeyCode::Char('x') => Action::EditorDeleteChar,
             KeyCode::Char('d') => Action::SetPending('d'),
             KeyCode::Char('c') => Action::SetPending('c'),
@@ -202,7 +243,8 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Char(':') => Action::EnterCommand,
             KeyCode::Esc => Action::EditorCancelExit,
             KeyCode::Char('s') if ctrl => Action::EditorSaveExit,
-            _ => Action::NoOp,
+            // Arrows, Home/End ("Fin"), Page Up/Down, Delete, Ctrl+arrows.
+            _ => standard_editor_key(key).unwrap_or(Action::NoOp),
         },
 
         // Visual mode: motions come from the normal-mode table (see the
@@ -223,16 +265,26 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
         ModeKind::EditorTyping => match key.code {
             KeyCode::Esc => Action::EditorExitTyping,
             KeyCode::Enter => Action::EditorNewline,
-            KeyCode::Backspace => Action::EditorBackspace,
             KeyCode::Tab => Action::EditorIndent,
             KeyCode::BackTab => Action::EditorDedent,
-            KeyCode::Left => Action::EditorMoveLeft,
-            KeyCode::Right => Action::EditorMoveRight,
-            KeyCode::Up => Action::EditorMoveUp,
-            KeyCode::Down => Action::EditorMoveDown,
             KeyCode::Char('s') if ctrl => Action::EditorSaveExit,
             KeyCode::Char('v') if ctrl => Action::EditorPasteBefore,
-            KeyCode::Char(c) => Action::EditorInsertChar(c),
+            // Ctrl+W is the terminal-wide "delete the word behind me", and
+            // Ctrl+Backspace reaches us as either Backspace+CTRL (terminals
+            // speaking the Kitty protocol) or as a bare 0x08, which crossterm
+            // reports as Ctrl+H — ASCII backspace, so treat it as one.
+            KeyCode::Char('w') if ctrl => Action::EditorDeleteWordBackPlain,
+            KeyCode::Backspace if ctrl => Action::EditorDeleteWordBackPlain,
+            KeyCode::Char('h') if ctrl => Action::EditorBackspace,
+            KeyCode::Backspace => Action::EditorBackspace,
+            // Arrows, Home/End ("Fin"), Page Up/Down, Delete, Ctrl+arrows.
+            _ if standard_editor_key(key).is_some() => {
+                standard_editor_key(key).expect("checked just above")
+            }
+            // Only unmodified characters are text. Without this guard an
+            // unbound chord like Ctrl+A would type a literal "a" into the
+            // entry instead of doing nothing.
+            KeyCode::Char(c) if !ctrl && !alt => Action::EditorInsertChar(c),
             _ => Action::NoOp,
         },
 
@@ -240,7 +292,9 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Enter => Action::CommandSubmit,
             KeyCode::Esc => Action::CommandCancel,
             KeyCode::Backspace => Action::CommandBackspace,
-            KeyCode::Char(c) => Action::CommandInsertChar(c),
+            // Guarded for the same reason as insert mode: a chord must not
+            // arrive as a literal character in the command line.
+            KeyCode::Char(c) if !ctrl && !alt => Action::CommandInsertChar(c),
             _ => Action::NoOp,
         },
 
@@ -252,6 +306,10 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => Action::HistoryNext,
             KeyCode::Char('g') => Action::SetPending('g'),
             KeyCode::Char('G') => Action::HistoryLast,
+            KeyCode::Home => Action::HistoryFirst,
+            KeyCode::End => Action::HistoryLast,
+            KeyCode::PageUp => Action::HistoryPrev,
+            KeyCode::PageDown => Action::HistoryNext,
             KeyCode::Char(':') => Action::HistoryEnterCommand,
             KeyCode::Esc | KeyCode::Char('q') => Action::HistoryClose,
             _ => Action::NoOp,
@@ -261,7 +319,7 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Enter => Action::TitleSubmit,
             KeyCode::Esc => Action::TitleCancel,
             KeyCode::Backspace => Action::TitleBackspace,
-            KeyCode::Char(c) => Action::TitleInsertChar(c),
+            KeyCode::Char(c) if !ctrl && !alt => Action::TitleInsertChar(c),
             _ => Action::NoOp,
         },
 
@@ -276,5 +334,120 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Char('k') | KeyCode::Up => Action::HelpScrollUp,
             _ => Action::HelpClose,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+    fn ctrl_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    /// An unbound chord must do nothing, not arrive as text. Ctrl+A used to
+    /// type a literal "a" into the entry.
+    #[test]
+    fn unbound_chords_are_not_typed_as_characters() {
+        for mode in [
+            ModeKind::EditorTyping,
+            ModeKind::Command,
+            ModeKind::TitlePrompt,
+        ] {
+            for c in ['a', 'z', 'q'] {
+                let action = resolve(mode, ctrl_key(KeyCode::Char(c)), None);
+                assert!(
+                    matches!(action, Action::NoOp),
+                    "{mode:?} turned Ctrl+{c} into {action:?}"
+                );
+            }
+        }
+        // Plain characters still reach the buffer.
+        assert!(matches!(
+            resolve(ModeKind::EditorTyping, key(KeyCode::Char('a')), None),
+            Action::EditorInsertChar('a')
+        ));
+    }
+
+    /// "Fin"/End and the other navigation keys have to work while typing,
+    /// not just in normal mode.
+    #[test]
+    fn standard_navigation_keys_work_in_every_editor_mode() {
+        for mode in [
+            ModeKind::EditorTyping,
+            ModeKind::EditorNormal,
+            ModeKind::EditorVisual,
+        ] {
+            assert!(
+                matches!(
+                    resolve(mode, key(KeyCode::End), None),
+                    Action::EditorLineEnd
+                ),
+                "End did not reach end-of-line in {mode:?}"
+            );
+            assert!(matches!(
+                resolve(mode, key(KeyCode::Home), None),
+                Action::EditorLineStart
+            ));
+            assert!(matches!(
+                resolve(mode, key(KeyCode::PageDown), None),
+                Action::EditorPageDown
+            ));
+            assert!(matches!(
+                resolve(mode, key(KeyCode::Delete), None),
+                Action::EditorDeleteForward
+            ));
+            assert!(matches!(
+                resolve(mode, ctrl_key(KeyCode::Right), None),
+                Action::EditorWordForward
+            ));
+            assert!(matches!(
+                resolve(mode, ctrl_key(KeyCode::Home), None),
+                Action::EditorBufferStart
+            ));
+        }
+    }
+
+    /// Vim's letter commands must not be shadowed by the shared navigation
+    /// table, and `h`/`l` must stay motions rather than becoming text.
+    #[test]
+    fn vim_letters_still_win_in_normal_mode() {
+        assert!(matches!(
+            resolve(ModeKind::EditorNormal, key(KeyCode::Char('h')), None),
+            Action::EditorMoveLeft
+        ));
+        assert!(matches!(
+            resolve(ModeKind::EditorNormal, key(KeyCode::Char('$')), None),
+            Action::EditorLineEnd
+        ));
+        // Ctrl+r is redo, and must not be swallowed by the `r` chord.
+        assert!(matches!(
+            resolve(ModeKind::EditorNormal, ctrl_key(KeyCode::Char('r')), None),
+            Action::EditorRedo
+        ));
+        assert!(matches!(
+            resolve(ModeKind::EditorNormal, key(KeyCode::Char('r')), None),
+            Action::SetPending('r')
+        ));
+    }
+
+    #[test]
+    fn chords_complete_and_abandon_correctly() {
+        assert!(matches!(
+            resolve(ModeKind::EditorNormal, key(KeyCode::Char('g')), Some('g')),
+            Action::EditorBufferStart
+        ));
+        assert!(matches!(
+            resolve(ModeKind::EditorNormal, key(KeyCode::Char('w')), Some('d')),
+            Action::EditorDeleteWord
+        ));
+        // An abandoned chord falls through to the second key's own meaning.
+        assert!(matches!(
+            resolve(ModeKind::EditorNormal, key(KeyCode::Char('$')), Some('g')),
+            Action::EditorLineEnd
+        ));
     }
 }

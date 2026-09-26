@@ -10,7 +10,8 @@ mod store;
 mod text;
 mod ui;
 
-use app::{App, Mode};
+use app::{App, Mode, ModeKind};
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, KeyboardEnhancementFlags,
     MouseButton, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -39,7 +40,12 @@ fn install_panic_hook() {
     let original = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(
+            io::stdout(),
+            SetCursorStyle::DefaultUserShape,
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
         original(info);
     }));
 }
@@ -66,6 +72,8 @@ fn setup_terminal() -> io::Result<(Terminal<CrosstermBackend<Stdout>>, bool)> {
 
 fn teardown_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>, kitty: bool) -> io::Result<()> {
     disable_raw_mode()?;
+    // Hand the shell back the cursor shape the user configured.
+    execute!(terminal.backend_mut(), SetCursorStyle::DefaultUserShape)?;
     if kitty {
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }
@@ -79,9 +87,25 @@ fn teardown_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>, kitty: b
 
 fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
     let mut app = App::new();
+    // Cursor shape, Vim-style: a thin bar while inserting, a block
+    // otherwise. Normal and visual deliberately share the block — the shape
+    // says "typing or not", the status badge names the exact mode. Tracked
+    // so the escape code is only emitted when it actually changes.
+    let mut bar_cursor: Option<bool> = None;
 
     while !app.should_quit {
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
+
+        let want_bar = matches!(app.mode_kind(), ModeKind::EditorTyping);
+        if bar_cursor != Some(want_bar) {
+            let style = if want_bar {
+                SetCursorStyle::SteadyBar
+            } else {
+                SetCursorStyle::SteadyBlock
+            };
+            execute!(terminal.backend_mut(), style)?;
+            bar_cursor = Some(want_bar);
+        }
 
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {

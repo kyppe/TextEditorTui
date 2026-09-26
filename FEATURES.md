@@ -148,6 +148,18 @@ the top of `src/keybind.rs`, then handle it in `action::apply`'s
 shortcut that does something new; one file (`keybind.rs` only) if
 you're just rebinding an existing `Action` to a different key.
 
+**Adding a key that types text?** Guard the arm with `if !ctrl && !alt`.
+Without it an unbound chord falls through the `KeyCode::Char(c)` catch-all
+and inserts a literal letter — Ctrl+A used to type "a" into the entry. The
+insert-mode, command-line and title-prompt arms all carry that guard, and
+`keybind::tests::unbound_chords_are_not_typed_as_characters` pins it.
+
+**Plain keyboard keys** (arrows, Home/End, Page Up/Down, Delete, Ctrl+arrows)
+live in `standard_editor_key`, shared by all three editor modes — put new
+ones there rather than in each mode's arm, so they keep working while typing
+as well as in normal mode. Note the register rule: keyboard editing keys pass
+`keep_register = true` to `cut_range`, Vim's operators pass `false`.
+
 ### Multi-key chords (`gg`, `dd`)
 
 `resolve` takes the in-progress chord as its `pending` argument, so chords

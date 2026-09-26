@@ -41,6 +41,10 @@ pub fn apply(app: &mut App, action: Action) {
         }
         Action::SelectFirst => app.selected = 0,
         Action::SelectLast => app.selected = app.store.entries.len().saturating_sub(1),
+        Action::SelectPageUp => app.selected = app.selected.saturating_sub(PAGE_ENTRIES),
+        Action::SelectPageDown => {
+            app.selected = (app.selected + PAGE_ENTRIES).min(app.store.entries.len().saturating_sub(1));
+        }
         Action::OpenTitlePrompt => open_title_prompt(app),
         Action::NewEntry => new_entry(app),
         Action::EditSelected => edit_selected(app),
@@ -141,6 +145,27 @@ pub fn apply(app: &mut App, action: Action) {
         }
 
         // Vim edits: operators, yank/paste, undo
+        // Plain keyboard editing keys: they change text but deliberately
+        // leave the yank register alone, unlike Vim's `x`/`d`/`c`, so
+        // pressing Delete doesn't clobber what you copied.
+        Action::EditorDeleteForward => {
+            let len = text::char_len(&app.editor.text);
+            if app.editor.cursor < len {
+                cut_range(app, app.editor.cursor, app.editor.cursor + 1, true);
+            }
+        }
+        Action::EditorDeleteWordBackPlain => {
+            let to = text::prev_word_start(&app.editor.text, app.editor.cursor);
+            cut_range(app, to, app.editor.cursor, true);
+        }
+        Action::EditorPageUp => {
+            let page = app.editor_view_height.max(1) as i32;
+            move_vertical(app, -page);
+        }
+        Action::EditorPageDown => {
+            let page = app.editor_view_height.max(1) as i32;
+            move_vertical(app, page);
+        }
         Action::EditorDeleteToLineStart => {
             let (start, _) = text::line_bounds(&app.editor.text, app.editor.cursor);
             cut_range(app, start, app.editor.cursor, false);
@@ -420,12 +445,15 @@ fn move_right(app: &mut App) {
     app.editor.cursor = (app.editor.cursor + 1).min(text::char_len(&app.editor.text));
 }
 
+/// Moves the cursor `delta` logical lines, keeping the column where it can.
+/// The target row is *clamped* to the buffer rather than abandoned: a Page
+/// Up from the second line has to land on the first line, not do nothing,
+/// and a Page Down past the end should sit on the last line at the same
+/// column instead of jumping to the very end of the text.
 fn move_vertical(app: &mut App, delta: i32) {
     let (row, col) = text::row_col(&app.editor.text, app.editor.cursor);
-    let target_row = row as i32 + delta;
-    if target_row < 0 {
-        return;
-    }
+    let last_row = app.editor.text.split('\n').count().saturating_sub(1) as i32;
+    let target_row = (row as i32 + delta).clamp(0, last_row);
     app.editor.cursor = text::char_index_at(&app.editor.text, target_row as u16, col);
 }
 
@@ -467,6 +495,10 @@ fn shift_marks_for_delete(formatting: &mut Formatting, at: usize, count: usize) 
 
 /// How many spaces `Tab` inserts in insert mode.
 const INDENT: usize = 4;
+
+/// How far Page Up/Down jumps in the journal list. Entries vary in height,
+/// so this is a count of entries rather than a screenful of rows.
+const PAGE_ENTRIES: usize = 5;
 
 /// Enters insert mode, snapshotting first so the whole typing session is a
 /// single undo step (Vim's behaviour) rather than one step per character.

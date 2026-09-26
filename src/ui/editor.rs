@@ -13,7 +13,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
+/// Takes `&mut App` only to record the text area's height for Page Up/Down;
+/// nothing else here mutates state.
+pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = match (&app.editor.entry_id, &app.editor.title) {
         (Some(id), Some(t)) => format!(" Editing {id} — {t} "),
         (Some(id), None) => format!(" Editing {id} "),
@@ -37,6 +39,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     if width == 0 {
         return;
     }
+    app.editor_view_height = text_area.height;
 
     let lines = crate::text::render_lines_sel(
         &app.editor.text,

@@ -192,6 +192,9 @@ pub struct App {
     pub pending_key: Option<char>,
     /// The yank register, mirrored to the system clipboard.
     pub register: crate::clipboard::Register,
+    /// Visible height of the editor's text area, recorded by `ui::editor`
+    /// each frame so Page Up/Down can jump by a screenful.
+    pub editor_view_height: u16,
 }
 
 impl App {
@@ -211,6 +214,7 @@ impl App {
             help_max_scroll: 0,
             pending_key: None,
             register: crate::clipboard::Register::default(),
+            editor_view_height: 0,
         }
     }
 
