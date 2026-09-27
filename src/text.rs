@@ -201,6 +201,67 @@ pub fn render_lines_sel(
     lines
 }
 
+/// Every visual row as a `(start, end)` character range, `end` excluding
+/// the newline that ended the row (if one did).
+///
+/// This is the list the cursor actually moves through: a long line that the
+/// screen shows as three rows is three entries here, so `j`/`k` and `V` can
+/// work on what you see rather than on the paragraph you typed. Derived
+/// from `wrap_positions`, the same function the renderer uses, so the rows
+/// here are exactly the rows on screen.
+pub fn visual_rows(text: &str, width: usize) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let breaks = wrap_positions(text, width);
+    let mut rows = Vec::new();
+    let mut start = 0usize;
+    let mut next_break = 0usize;
+
+    for (i, ch) in chars.iter().enumerate() {
+        // A soft break starts a new row at `i`; the row before it ends there.
+        while next_break < breaks.len() && breaks[next_break] <= i {
+            if breaks[next_break] == i {
+                rows.push((start, i));
+                start = i;
+            }
+            next_break += 1;
+        }
+        if *ch == '\n' {
+            rows.push((start, i));
+            start = i + 1;
+        }
+    }
+    rows.push((start, chars.len()));
+    rows
+}
+
+/// Index of the visual row holding `cursor`, plus that row's bounds.
+///
+/// A cursor sitting exactly on a soft break belongs to the *following* row,
+/// matching `visual_row_col`, which advances its row at the same point.
+fn visual_row_of(rows: &[(usize, usize)], cursor: usize) -> usize {
+    rows.iter()
+        .rposition(|(start, _)| *start <= cursor)
+        .unwrap_or(0)
+}
+
+/// Bounds of the visual row the cursor is on — what `V` selects.
+pub fn visual_row_bounds(text: &str, cursor: usize, width: usize) -> (usize, usize) {
+    let rows = visual_rows(text, width);
+    rows[visual_row_of(&rows, cursor)]
+}
+
+/// Moves `cursor` by `delta` visual rows, keeping its column where the new
+/// row is long enough. Clamped to the first and last row rather than
+/// refusing to move, so a Page Up near the top still lands at the top.
+pub fn visual_move(text: &str, cursor: usize, width: usize, delta: i32) -> usize {
+    let rows = visual_rows(text, width);
+    let current = visual_row_of(&rows, cursor);
+    let col = cursor.saturating_sub(rows[current].0);
+    let target = (current as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize;
+    let (start, end) = rows[target];
+    (start + col).min(end)
+}
+
 /// Visual row/column of a character offset once soft wrapping at `width`
 /// is taken into account — i.e. where the terminal cursor goes. Distinct
 /// from `row_col`, which is about *logical* lines (what `j`/`k` move
@@ -743,6 +804,57 @@ mod tests {
             assert_eq!(hit.style.bg, Some(SEARCH_BG), "{kind:?}");
             assert_ne!(hit.style.fg, hit.style.bg, "{kind:?} left fg == bg");
         }
+    }
+
+    /// The rows the cursor moves through must be the rows on screen: one
+    /// long line shown as three rows is three rows to `j`/`k` and to `V`.
+    #[test]
+    fn visual_rows_follow_what_is_rendered() {
+        let text = "aaa bbb ccc ddd\nshort";
+        let width = 8;
+        // Rendered: "aaa bbb ", "ccc ddd", "short"
+        let rendered: Vec<String> = render_lines(text, &[], width)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        let rows = visual_rows(text, width);
+        assert_eq!(rows.len(), rendered.len(), "row count vs rendered rows");
+        for (i, (start, end)) in rows.iter().enumerate() {
+            let slice: String = text.chars().skip(*start).take(end - start).collect();
+            assert_eq!(slice, rendered[i], "row {i}");
+        }
+    }
+
+    #[test]
+    fn vertical_movement_steps_one_visual_row_at_a_time() {
+        let text = "aaa bbb ccc ddd\nshort";
+        let width = 8;
+        // From the first row, down lands inside the *same* logical line.
+        let down1 = visual_move(text, 0, width, 1);
+        assert_eq!(visual_row_col(text, down1, width).0, 1);
+        let down2 = visual_move(text, down1, width, 1);
+        assert_eq!(visual_row_col(text, down2, width).0, 2);
+        // And back up again, row by row.
+        assert_eq!(visual_move(text, down2, width, -1), down1);
+        assert_eq!(visual_move(text, down1, width, -1), 0);
+        // Clamped at both ends instead of refusing to move.
+        assert_eq!(visual_move(text, 0, width, -5), 0);
+        assert_eq!(
+            visual_row_col(text, visual_move(text, 0, width, 99), width).0,
+            2
+        );
+    }
+
+    #[test]
+    fn v_selects_one_visual_row_not_the_whole_wrapped_line() {
+        let text = "aaa bbb ccc ddd";
+        let width = 8;
+        // Cursor on the first row selects only that row...
+        assert_eq!(visual_row_bounds(text, 1, width), (0, 8));
+        // ...and on the second row, only the rest.
+        assert_eq!(visual_row_bounds(text, 9, width), (8, 15));
+        // With no wrapping it is simply the whole line.
+        assert_eq!(visual_row_bounds(text, 1, 80), (0, 15));
     }
 
     #[test]

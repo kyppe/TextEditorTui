@@ -99,16 +99,20 @@ pub struct EditorState {
     /// Character offset, not byte offset (see `text.rs`).
     pub cursor: usize,
     pub selection_anchor: Option<usize>,
-    /// `V` makes the selection *linewise*: extending it with j/k covers
-    /// whole lines, as in Vim, rather than stopping mid-line wherever the
-    /// cursor happens to land. See `selection_range`.
-    pub selection_linewise: bool,
+    /// `V` makes the selection cover whole *visual rows* — the rows on
+    /// screen, not the paragraph you typed. See `selection_range`.
+    pub selection_rowwise: bool,
     pub formatting: Formatting,
     /// Vim-style: true while characters typed are inserted as text.
     /// Starts `false` — the editor opens in NORMAL mode, like Vim.
     pub typing: bool,
     pub undo: Vec<Snapshot>,
     pub redo: Vec<Snapshot>,
+    /// Width the text is currently wrapped to, recorded by `ui::editor`
+    /// every frame. Row-wise selections need it to know where the rows on
+    /// screen begin and end; 0 until the first draw, which falls back to
+    /// logical lines.
+    pub wrap_width: usize,
 }
 
 impl EditorState {
@@ -119,11 +123,12 @@ impl EditorState {
             text: String::new(),
             cursor: 0,
             selection_anchor: None,
-            selection_linewise: false,
+            selection_rowwise: false,
             formatting: Formatting::default(),
             typing: false,
             undo: Vec::new(),
             redo: Vec::new(),
+            wrap_width: 0,
         }
     }
 
@@ -142,7 +147,7 @@ impl EditorState {
         self.text = s.text;
         self.formatting = s.formatting;
         self.selection_anchor = None;
-        self.selection_linewise = false;
+        self.selection_rowwise = false;
     }
 
     /// Records the pre-edit state for `u`, and drops the redo branch —
@@ -156,9 +161,13 @@ impl EditorState {
         self.redo.clear();
     }
 
-    /// The selected character range. A linewise selection (`V`) is widened
-    /// to the full first and last lines it touches, so moving the cursor up
-    /// or down keeps whole lines selected instead of cutting one in half.
+    /// The selected character range. A row-wise selection (`V`) is widened
+    /// to the full first and last rows it touches — the rows as displayed,
+    /// so `V` on a line the screen wrapped selects just the row you can
+    /// see, and extending with `j`/`k` adds a row at a time.
+    ///
+    /// Before the first draw there is no width to wrap against, so it falls
+    /// back to logical lines.
     pub fn selection_range(&self) -> Option<(usize, usize)> {
         let anchor = self.selection_anchor?;
         let (lo, hi) = if anchor <= self.cursor {
@@ -166,18 +175,22 @@ impl EditorState {
         } else {
             (self.cursor, anchor)
         };
-        if self.selection_linewise {
+        if !self.selection_rowwise {
+            return Some((lo, hi));
+        }
+        if self.wrap_width == 0 {
             let (start, _) = crate::text::line_bounds(&self.text, lo);
             let (_, end) = crate::text::line_bounds(&self.text, hi);
-            Some((start, end))
-        } else {
-            Some((lo, hi))
+            return Some((start, end));
         }
+        let (start, _) = crate::text::visual_row_bounds(&self.text, lo, self.wrap_width);
+        let (_, end) = crate::text::visual_row_bounds(&self.text, hi, self.wrap_width);
+        Some((start, end))
     }
 
     pub fn clear_selection(&mut self) {
         self.selection_anchor = None;
-        self.selection_linewise = false;
+        self.selection_rowwise = false;
     }
 }
 
@@ -315,7 +328,7 @@ mod tests {
         //          0..8       9..17      18..28
         let mut e = editor_with(text, 18); // start of "line three"
         e.selection_anchor = Some(18);
-        e.selection_linewise = true;
+        e.selection_rowwise = true;
         assert_eq!(e.selection_range(), Some((18, 28)));
 
         // Cursor up into the previous line: both lines stay whole.
@@ -338,7 +351,7 @@ mod tests {
     fn clearing_a_selection_also_clears_linewise() {
         let mut e = editor_with("a\nb", 0);
         e.selection_anchor = Some(0);
-        e.selection_linewise = true;
+        e.selection_rowwise = true;
         e.clear_selection();
         // A later charwise `v` must not inherit linewise behaviour.
         e.cursor = 2;

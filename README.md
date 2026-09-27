@@ -299,7 +299,7 @@ left unnumbered, and the cursor's line number is highlighted.
 
 | Key | Action |
 |---|---|
-| `h`/`l`/`j`/`k` | Move cursor |
+| `h`/`l`/`j`/`k` | Move cursor — `j`/`k` move one row **as displayed** |
 | `w` / `b` / `e` | Next word / previous word / end of word |
 | `gg` / `G` | First / last line of the entry |
 | `0` / `^` / `$` | Line start / first non-blank / line end |
@@ -352,7 +352,7 @@ and paste in a browser, or the other way round.
 | Key | Action |
 |---|---|
 | `v` | Start/clear a selection at the cursor (VISUAL) |
-| `V` | Select the whole current line |
+| `V` | Select the current row as displayed (`j`/`k` then extend a row at a time) |
 | `d` / `x` / `c` / `y` / `p` (in VISUAL) | Delete / change / yank / paste over the selection |
 
 *Saving and leaving*
@@ -368,6 +368,13 @@ and paste in a browser, or the other way round.
 
 Notes on the Vim emulation, so nothing surprises you:
 
+- **`j`/`k` and `V` work on rows as displayed, not on the paragraph you
+  typed.** When the window wraps a long line across three rows, `j` steps
+  through those three rows and `V` selects just the one you can see. This is
+  deliberately *unlike* Vim's defaults (where those need `gj`/`gk`), because
+  moving should match what's on screen. `dd`, `cc` and `J` still work on the
+  whole logical line, and `:done` with no selection still crosses off the
+  whole thought rather than one row of it.
 - Words are whitespace-delimited (Vim's `W`/`B`/`E` behaviour).
 - A whole insert session is **one** undo step, as in Vim.
 - Running any `:`-command returns you to NORMAL mode (a command issued

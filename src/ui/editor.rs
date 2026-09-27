@@ -40,6 +40,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     app.editor_view_height = text_area.height;
+    // Row-wise selections and vertical movement need the width the text is
+    // actually wrapped to; recorded here so they agree with what's drawn.
+    app.editor.wrap_width = width;
 
     // Search hits stay highlighted after the prompt closes, like `hlsearch`.
     let hits = match &app.search {

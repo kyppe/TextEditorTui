@@ -256,7 +256,7 @@ pub fn apply(app: &mut App, action: Action) {
         }
         Action::EditorYankSelection => {
             if let Some((s, e)) = app.editor.selection_range() {
-                let linewise = app.editor.selection_linewise;
+                let linewise = app.editor.selection_rowwise;
                 let text = slice(&app.editor.text, s, e);
                 let n = text.chars().count();
                 let lines = text.split('\n').count();
@@ -276,7 +276,7 @@ pub fn apply(app: &mut App, action: Action) {
             if let Some((s, e)) = app.editor.selection_range() {
                 // A linewise selection takes its lines out whole, newline
                 // included, rather than leaving empty lines behind.
-                if app.editor.selection_linewise {
+                if app.editor.selection_rowwise {
                     cut_lines(app, s, e);
                 } else {
                     cut_range(app, s, e, false);
@@ -302,7 +302,7 @@ pub fn apply(app: &mut App, action: Action) {
         }
 
         Action::EditorSelectLine => {
-            if app.editor.selection_anchor.is_some() && app.editor.selection_linewise {
+            if app.editor.selection_anchor.is_some() && app.editor.selection_rowwise {
                 // `V` again leaves visual mode, as in Vim.
                 app.editor.clear_selection();
                 app.set_info("Selection cleared");
@@ -313,8 +313,8 @@ pub fn apply(app: &mut App, action: Action) {
                 if app.editor.selection_anchor.is_none() {
                     app.editor.selection_anchor = Some(app.editor.cursor);
                 }
-                app.editor.selection_linewise = true;
-                app.set_info("Line selected — j/k extend, :done, or a format command");
+                app.editor.selection_rowwise = true;
+                app.set_info("Row selected — j/k extend, :done, or a format command");
             }
         }
         Action::EditorSaveExit => save_editor(app),
@@ -518,16 +518,27 @@ fn move_right(app: &mut App) {
     app.editor.cursor = (app.editor.cursor + 1).min(text::char_len(&app.editor.text));
 }
 
-/// Moves the cursor `delta` logical lines, keeping the column where it can.
-/// The target row is *clamped* to the buffer rather than abandoned: a Page
-/// Up from the second line has to land on the first line, not do nothing,
-/// and a Page Down past the end should sit on the last line at the same
-/// column instead of jumping to the very end of the text.
+/// Moves the cursor `delta` rows **as displayed**, keeping its column.
+///
+/// Rows here are visual rows, so a line the screen wrapped into three is
+/// three steps of `j` — moving matches what you see instead of skipping a
+/// whole paragraph at a time. Clamped to the first and last row rather than
+/// abandoned, so a Page Up near the top still lands at the top.
 fn move_vertical(app: &mut App, delta: i32) {
-    let (row, col) = text::row_col(&app.editor.text, app.editor.cursor);
-    let last_row = app.editor.text.split('\n').count().saturating_sub(1) as i32;
-    let target_row = (row as i32 + delta).clamp(0, last_row);
-    app.editor.cursor = text::char_index_at(&app.editor.text, target_row as u16, col);
+    if app.editor.wrap_width == 0 {
+        // No draw yet, so no wrap points are known: fall back to logical lines.
+        let (row, col) = text::row_col(&app.editor.text, app.editor.cursor);
+        let last = app.editor.text.split('\n').count().saturating_sub(1) as i32;
+        let target = (row as i32 + delta).clamp(0, last);
+        app.editor.cursor = text::char_index_at(&app.editor.text, target as u16, col);
+        return;
+    }
+    app.editor.cursor = text::visual_move(
+        &app.editor.text,
+        app.editor.cursor,
+        app.editor.wrap_width,
+        delta,
+    );
 }
 
 /// Shifts every mark boundary at or after `at` forward by `count`
@@ -617,11 +628,15 @@ fn cut_lines(app: &mut App, start: usize, end: usize) {
     let len = text::char_len(&app.editor.text);
     let lines = slice(&app.editor.text, start, end);
     crate::clipboard::yank(&mut app.register, lines, true);
-    // Take the trailing newline with the lines; at the end of the buffer
-    // take the preceding one instead, so no blank line is left behind.
-    let (from, to) = if end < len {
+    // Only take a newline that really is there: a row-wise selection can end
+    // mid-paragraph, where the next character belongs to the following row
+    // and must not be eaten.
+    let ends_line = app.editor.text.chars().nth(end) == Some('\n');
+    let (from, to) = if ends_line {
         (start, end + 1)
-    } else if start > 0 {
+    } else if end >= len && start > 0 && app.editor.text.chars().nth(start - 1) == Some('\n') {
+        // Last line of the buffer: take the newline in front of it instead,
+        // so deleting it doesn't leave a blank line behind.
         (start - 1, end)
     } else {
         (start, end)

@@ -100,10 +100,19 @@ two slightly different behaviors.
   test `cursor_position_agrees_with_rendered_wrapping` walks every
   character offset in a multi-line buffer and asserts the two agree.
 
-  Note the deliberate pair: `row_col` is about **logical** lines (what
-  `j`/`k` move between, what `0`/`$` act on), `visual_row_col` is about
-  **visual** rows after wrapping (where the cursor is drawn). Don't
-  substitute one for the other.
+  Note the deliberate pair: `row_col` is about **logical** lines (newline to
+  newline — what `dd`, `cc`, `J` and `0`/`$` act on), while `visual_rows` /
+  `visual_row_col` / `visual_move` are about **rows as displayed** — what
+  `j`/`k`, Page Up/Down and `V` act on, so navigation matches the screen when
+  a long line wraps. Don't substitute one for the other, and don't re-derive
+  wrap points: everything visual comes from `wrap_positions`, which is also
+  what the renderer draws from, so rows on screen and rows the cursor visits
+  are the same rows (`visual_rows_follow_what_is_rendered` asserts it).
+
+  Row-wise selections need the width to know where rows begin, so
+  `ui::editor` records it on `EditorState::wrap_width` each frame and
+  `selection_range` widens a `V` selection with it, falling back to logical
+  lines before the first draw.
 
   **One character is one terminal column.** Everything above depends on it,
   so `render_lines` substitutes a space for any literal tab: left alone, the
