@@ -72,9 +72,12 @@ pub const FORMATS: &[FormatDef] = &[
         // looks. (`:h` is Vim's help, so it isn't used for links here.)
         command: None,
         name: "link",
+        // A light blue rather than the terminal's dark blue: links have to
+        // stay legible on the journal list's highlighted-entry background
+        // as well as on the default one.
         style: || {
             Style::default()
-                .fg(Color::Blue)
+                .fg(Color::Rgb(122, 176, 255))
                 .add_modifier(Modifier::UNDERLINED)
         },
     },

@@ -112,6 +112,18 @@ two slightly different behaviors.
   inserts spaces for the same reason. The stored text keeps whatever it had,
   so nothing is rewritten behind the user's back.
 
+  **Overlays set a foreground, not just a background.** A mark underneath a
+  selection or a search hit brings its own colour, so painting only a
+  background can land same-on-same — a blue link on the old blue selection
+  was invisible. The selection and search styles both force a contrasting
+  `fg`, replacing only the colours so the underline/bold/strikethrough of
+  whatever is selected still shows. Two tests
+  (`selected_text_is_readable_over_any_mark`,
+  `search_hits_are_readable_over_any_mark`) assert `fg != bg` for every mark
+  kind. Mark colours themselves must also stay legible on the journal list's
+  highlighted-entry background, which is why the link blue is a light RGB
+  rather than the terminal's dark blue.
+
   `trimmed_line_spans` is the other half of that: it turns a selected range
   into per-line, whitespace-trimmed ranges so a mark covers words rather
   than the blank margin around them. Mark-applying actions go through

@@ -44,8 +44,15 @@ pub fn remove_before(s: &mut String, char_idx: usize) {
     s.replace_range(start..end, "");
 }
 
-/// Background used to show the live editor selection.
-const SELECTION_BG: Color = Color::Blue;
+/// Colours for the live editor selection.
+///
+/// The selection sets a foreground as well as a background, because a mark
+/// underneath it carries its own colour — a blue link on a blue selection
+/// was unreadable. Forcing both guarantees contrast whatever the text was
+/// styled as, and since only the *colours* are replaced, the underline,
+/// bold, italic and strikethrough of whatever is selected still show.
+const SELECTION_BG: Color = Color::Rgb(58, 66, 92);
+const SELECTION_FG: Color = Color::Rgb(236, 239, 246);
 
 /// Background for `/` search hits.
 const SEARCH_BG: Color = Color::Yellow;
@@ -185,7 +192,7 @@ pub fn render_lines_sel(
         // Selection is painted last so it stays visible over a search hit.
         if let Some((s, e)) = selection {
             if s <= a && e >= b && s != e {
-                style = style.bg(SELECTION_BG);
+                style = style.bg(SELECTION_BG).fg(SELECTION_FG);
             }
         }
         current.push(Span::styled(segment, style));
@@ -685,6 +692,57 @@ mod tests {
         // Selecting " beta " mid-line trims to just "beta".
         assert_eq!(trimmed_line_spans(t, 5, 11), vec![(6, 10)]);
         assert_eq!(&t[6..10], "beta");
+    }
+
+    /// Selecting a link used to make it invisible: the link's blue
+    /// foreground sat on a blue selection background. Whatever a mark
+    /// colours the text, a selected span must stay readable.
+    #[test]
+    fn selected_text_is_readable_over_any_mark() {
+        let text = "click here now";
+        for kind in [
+            MarkKind::Link,
+            MarkKind::Code,
+            MarkKind::Heading,
+            MarkKind::Highlight,
+            MarkKind::Bold,
+        ] {
+            let marks = vec![Mark::new(6, 10, kind)];
+            let lines = render_lines_sel(text, &marks, 80, Some((0, 14)), &[]);
+            for span in lines.iter().flat_map(|l| l.spans.iter()) {
+                assert_ne!(
+                    span.style.fg, span.style.bg,
+                    "{kind:?} rendered {:?} with fg == bg",
+                    span.content
+                );
+                assert_eq!(span.style.bg, Some(SELECTION_BG), "{kind:?}");
+                assert_eq!(span.style.fg, Some(SELECTION_FG), "{kind:?}");
+            }
+        }
+    }
+
+    /// The same hazard applies to search hits sitting under a coloured mark.
+    /// Only the highlighted spans are checked: unstyled text legitimately
+    /// has neither colour set.
+    #[test]
+    fn search_hits_are_readable_over_any_mark() {
+        let text = "click here now";
+        for kind in [
+            MarkKind::Link,
+            MarkKind::Code,
+            MarkKind::Heading,
+            MarkKind::Highlight,
+        ] {
+            let marks = vec![Mark::new(6, 10, kind)];
+            let lines = render_lines_sel(text, &marks, 80, None, &[(6, 10)]);
+            let hit = lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .find(|s| s.content == "here")
+                .unwrap_or_else(|| panic!("{kind:?}: no span for the match"));
+            assert_eq!(hit.style.bg, Some(SEARCH_BG), "{kind:?}");
+            assert_ne!(hit.style.fg, hit.style.bg, "{kind:?} left fg == bg");
+        }
     }
 
     #[test]

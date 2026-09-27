@@ -151,7 +151,7 @@ Select some text and give it an address:
 :link https://doc.rust-lang.org
 ```
 
-The text turns blue and underlined. Put the cursor on it and press **`gx`**
+The text turns light blue and underlined. Put the cursor on it and press **`gx`**
 (Vim's binding for "open the thing under the cursor") to open it in your
 browser. `:unlink` removes the link again.
 
