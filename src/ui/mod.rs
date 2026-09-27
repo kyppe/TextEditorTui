@@ -22,6 +22,7 @@ use ratatui::Frame;
 fn base_mode(mode: &Mode) -> &Mode {
     match mode {
         Mode::Command { return_to } => base_mode(return_to),
+        Mode::Search { return_to, .. } => base_mode(return_to),
         Mode::Confirm { return_to, .. } => base_mode(return_to),
         Mode::Help { return_to, .. } => base_mode(return_to),
         Mode::TitlePrompt { return_to, .. } => base_mode(return_to),
@@ -71,6 +72,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn mode_badge(app: &App) -> (&'static str, Color) {
     match &app.mode {
         Mode::Command { .. } => ("COMMAND", Color::Yellow),
+        Mode::Search { .. } => ("SEARCH", Color::Yellow),
         Mode::History { .. } => ("HISTORY", Color::Cyan),
         Mode::Help { .. } => ("HELP", Color::Cyan),
         Mode::Confirm { .. } => ("CONFIRM", Color::Red),
@@ -105,6 +107,10 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(":", Style::default().fg(Color::Cyan)));
         spans.push(Span::raw(app.command_input.clone()));
         spans.push(Span::styled("█", Style::default().fg(Color::Cyan)));
+    } else if let Mode::Search { input, .. } = &app.mode {
+        spans.push(Span::styled("/", Style::default().fg(Color::Yellow)));
+        spans.push(Span::raw(input.clone()));
+        spans.push(Span::styled("█", Style::default().fg(Color::Yellow)));
     } else if let Some((msg, level)) = &app.status {
         let msg_color = match level {
             crate::app::StatusLevel::Info => Color::Green,
@@ -127,9 +133,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
                 if app.editor.typing {
                     "Esc: normal mode · Tab: indent · Ctrl+S: save & exit"
                 } else if app.editor.selection_anchor.is_some() {
-                    "y yank · d/x cut · c change · p paste over · :done · Esc"
+                    "y yank · d/x cut · c change · p paste over · :done · :link · Esc"
                 } else {
-                    "i a o O · w b e gg G · x dd dw cw D C · yy p P · u Ctrl+r · :w :wq :q"
+                    "i a o O · w b e gg G · x dd cw D · yy p P · u · / n N · gx · :w :wq"
                 }
             }
             Mode::History { .. } => {

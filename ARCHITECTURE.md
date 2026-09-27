@@ -137,6 +137,13 @@ two slightly different behaviors.
   is how motions stay defined once. `pending` carries a half-typed chord
   (`gg`, `dd`, `cw`, `r<char>`); see FEATURES.md "Multi-key chords".
 
+- **`src/browser.rs`** — hands a link to the desktop's opener for `gx`.
+  Same shape as the clipboard bridge: shell out to `xdg-open`/`open`/`gio`,
+  URL passed as a single `Command` argument so nothing in it can be read as
+  a command. `normalize` is the gatekeeper — it https-prefixes a bare
+  domain but refuses any scheme outside http/https/mailto, because a
+  journal file is just JSON that could have come from anywhere.
+
 - **`src/clipboard.rs`** — the yank register and the system-clipboard
   bridge. Yanks and deletes fill both; paste prefers the system clipboard
   when it holds something newer, so copy/paste works across applications

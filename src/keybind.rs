@@ -92,6 +92,17 @@ pub enum Action {
     EditorNewline,
     EditorExitTyping,
 
+    // --- Search (`/`, n, N) ---
+    EnterSearch,
+    SearchInsertChar(char),
+    SearchBackspace,
+    SearchSubmit,
+    SearchCancel,
+    SearchNext,
+    SearchPrev,
+    /// `gx` — open the link under the cursor.
+    OpenLinkUnderCursor,
+
     // --- Command line ---
     CommandInsertChar(char),
     CommandBackspace,
@@ -166,6 +177,8 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             (Normal, 'g', KeyCode::Char('g')) => Action::SelectFirst,
             (History, 'g', KeyCode::Char('g')) => Action::HistoryFirst,
             (EditorNormal | EditorVisual, 'g', KeyCode::Char('g')) => Action::EditorBufferStart,
+            // Vim's netrw binding for "open the thing under the cursor".
+            (EditorNormal | EditorVisual, 'g', KeyCode::Char('x')) => Action::OpenLinkUnderCursor,
             // Operators: `d`/`c` + a motion.
             (EditorNormal, 'd', KeyCode::Char('d')) => Action::EditorDeleteLine,
             (EditorNormal, 'd', KeyCode::Char('w')) => Action::EditorDeleteWord,
@@ -237,6 +250,9 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Char('P') => Action::EditorPasteBefore,
             KeyCode::Char('J') => Action::EditorJoinLines,
             KeyCode::Char('u') => Action::EditorUndo,
+            KeyCode::Char('/') => Action::EnterSearch,
+            KeyCode::Char('n') => Action::SearchNext,
+            KeyCode::Char('N') => Action::SearchPrev,
             KeyCode::Char('v') => Action::EditorToggleSelection,
             KeyCode::Char('V') => Action::EditorSelectLine,
             KeyCode::Char('H') => Action::EditorOpenHistory,
@@ -295,6 +311,14 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             // Guarded for the same reason as insert mode: a chord must not
             // arrive as a literal character in the command line.
             KeyCode::Char(c) if !ctrl && !alt => Action::CommandInsertChar(c),
+            _ => Action::NoOp,
+        },
+
+        ModeKind::Search => match key.code {
+            KeyCode::Enter => Action::SearchSubmit,
+            KeyCode::Esc => Action::SearchCancel,
+            KeyCode::Backspace => Action::SearchBackspace,
+            KeyCode::Char(c) if !ctrl && !alt => Action::SearchInsertChar(c),
             _ => Action::NoOp,
         },
 

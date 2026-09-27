@@ -26,6 +26,8 @@ pub enum MarkKind {
     Heading,
     /// Crossed-out text; what `:done` applies to a finished line.
     Strikethrough,
+    /// Text pointing at a URL, carried in `Mark::url`. Opened with `gx`.
+    Link,
 }
 
 /// A formatting mark applied to a `[start, end)` range of *character*
@@ -35,6 +37,22 @@ pub struct Mark {
     pub start: usize,
     pub end: usize,
     pub kind: MarkKind,
+    /// Where a `MarkKind::Link` points; `None` for every other kind.
+    /// `#[serde(default)]` keeps journals written before links existed
+    /// loading, and skipping it when empty keeps the file tidy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+impl Mark {
+    pub fn new(start: usize, end: usize, kind: MarkKind) -> Self {
+        Mark {
+            start,
+            end,
+            kind,
+            url: None,
+        }
+    }
 }
 
 /// All formatting attached to a single version of an entry's text.
@@ -65,11 +83,34 @@ impl Formatting {
             }
             !touches
         });
+        self.marks.push(Mark::new(lo, hi, kind));
+    }
+
+    /// Attaches `url` to `[start, end)`, replacing any link that overlaps it.
+    ///
+    /// Links deliberately don't go through `set`: merging two neighbouring
+    /// links would have to pick one of their URLs and silently drop the
+    /// other, so each link stays its own mark.
+    pub fn set_link(&mut self, start: usize, end: usize, url: String) {
+        if start >= end {
+            return;
+        }
+        self.marks
+            .retain(|m| m.kind != MarkKind::Link || m.end <= start || m.start >= end);
         self.marks.push(Mark {
-            start: lo,
-            end: hi,
-            kind,
+            start,
+            end,
+            kind: MarkKind::Link,
+            url: Some(url),
         });
+    }
+
+    /// The URL of the link covering character `pos`, if there is one.
+    pub fn link_at(&self, pos: usize) -> Option<&str> {
+        self.marks
+            .iter()
+            .find(|m| m.kind == MarkKind::Link && m.start <= pos && m.end > pos)
+            .and_then(|m| m.url.as_deref())
     }
 
     /// Removes `kind` from `[start, end)`, trimming or splitting marks
@@ -84,11 +125,14 @@ impl Formatting {
                 out.push(m);
                 continue;
             }
+            // Split pieces keep the original's URL, so clearing the middle of
+            // a link leaves both halves pointing where they did.
             if m.start < start {
                 out.push(Mark {
                     start: m.start,
                     end: start,
                     kind,
+                    url: m.url.clone(),
                 });
             }
             if m.end > end {
@@ -96,6 +140,7 @@ impl Formatting {
                     start: end,
                     end: m.end,
                     kind,
+                    url: m.url.clone(),
                 });
             }
         }
@@ -331,6 +376,44 @@ mod tests {
         f.clear(0, 20, MarkKind::Strikethrough);
         assert!(!f.marks.iter().any(|m| m.kind == MarkKind::Strikethrough));
         assert!(f.covers(0, 20, MarkKind::Italic));
+    }
+
+    #[test]
+    fn links_carry_a_url_and_never_merge() {
+        let mut f = Formatting::default();
+        f.set_link(0, 5, "https://a.test".into());
+        f.set_link(6, 9, "https://b.test".into());
+        // Two adjacent links stay separate, each with its own target.
+        assert_eq!(f.marks.len(), 2);
+        assert_eq!(f.link_at(0), Some("https://a.test"));
+        assert_eq!(f.link_at(4), Some("https://a.test"));
+        assert_eq!(f.link_at(7), Some("https://b.test"));
+        // Outside any link.
+        assert_eq!(f.link_at(5), None);
+        assert_eq!(f.link_at(20), None);
+
+        // Re-linking an overlapping range replaces the old target.
+        f.set_link(0, 5, "https://c.test".into());
+        assert_eq!(f.marks.len(), 2);
+        assert_eq!(f.link_at(2), Some("https://c.test"));
+
+        // Clearing the middle of a link keeps the URL on both halves.
+        f.set_link(0, 10, "https://d.test".into());
+        f.clear(4, 6, MarkKind::Link);
+        assert_eq!(f.link_at(2), Some("https://d.test"));
+        assert_eq!(f.link_at(8), Some("https://d.test"));
+        assert_eq!(f.link_at(5), None);
+    }
+
+    /// A pre-link journal has no `url` field at all; it must still load.
+    #[test]
+    fn marks_saved_before_links_still_deserialize() {
+        let m: Mark = serde_json::from_str(
+            r#"{"start":0,"end":4,"kind":"Bold"}"#,
+        )
+        .expect("pre-link mark must load");
+        assert_eq!(m.url, None);
+        assert_eq!(m.kind, MarkKind::Bold);
     }
 
     /// Journals written before titles existed must keep loading, with the

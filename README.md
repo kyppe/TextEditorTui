@@ -78,8 +78,8 @@ text.
 
 The bottom-left corner always shows which mode you're in, and therefore
 which keys are live: `JOURNAL` (browsing the list), `NORMAL` / `INSERT` /
-`VISUAL` (in the editor), plus `COMMAND`, `HISTORY`, `TITLE`, `HELP` and
-`CONFIRM`. The rest of that line is a hint for the current mode, or the
+`VISUAL` (in the editor), plus `COMMAND`, `SEARCH`, `HISTORY`, `TITLE`,
+`HELP` and `CONFIRM`. The rest of that line is a hint for the current mode, or the
 last status message.
 
 The **cursor shape** follows suit, like Vim: a thin bar while you're typing
@@ -143,6 +143,38 @@ margin:
 Over a multi-line selection each line is handled separately, so the gap
 between lines isn't marked either.
 
+### Links
+
+Select some text and give it an address:
+
+```
+:link https://doc.rust-lang.org
+```
+
+The text turns blue and underlined. Put the cursor on it and press **`gx`**
+(Vim's binding for "open the thing under the cursor") to open it in your
+browser. `:unlink` removes the link again.
+
+Shortcuts: `:link` with no address uses the selected text as its own target,
+so selecting a pasted URL and running `:link` is enough. A bare `example.com`
+gets `https://` added. And `gx` also works on a plain URL sitting in your
+text that you never marked at all.
+
+Only `http`, `https` and `mailto` links will open — a journal file is just
+JSON that could have come from anywhere, so anything more exotic is refused
+rather than handed to a protocol handler.
+
+### Searching
+
+Press **`/`** in the editor, type, and press Enter. **`n`** goes to the next
+match, **`N`** to the previous one, both wrapping around; the status line
+shows "Match 2 of 3". Matches stay highlighted until you search for something
+else.
+
+Matching is plain text, not regular expressions, and *smart case*: a
+lowercase pattern matches either case, while a capital in the pattern makes
+it exact (`cat` finds "Cat", `Cat` doesn't find "cat").
+
 ### Formatting text
 
 While editing an entry, press `Esc` to leave typing mode, move the
@@ -160,10 +192,12 @@ a format command:
 :strike crossed out (`:done`/`:undone` are the line-aware version)
 ```
 
-Running the same command again on the same exact selection removes the
-mark. Formatting is stored as data (start/end + type) alongside the
-text, not baked into it — see `FEATURES.md` if you want to add more
-formatting types.
+Links are their own thing, since they need an address — see above.
+
+Running the same command again on text that already carries the mark
+removes it. Formatting is stored as data (start/end + type, plus a URL for
+links) alongside the text, not baked into it — see `FEATURES.md` if you want
+to add more formatting types.
 
 ### Entry history
 
@@ -243,6 +277,9 @@ left unnumbered, and the cursor's line number is highlighted.
 | `w` / `b` / `e` | Next word / previous word / end of word |
 | `gg` / `G` | First / last line of the entry |
 | `0` / `^` / `$` | Line start / first non-blank / line end |
+| `/` then Enter | Search |
+| `n` / `N` | Next / previous match |
+| `gx` | Open the link (or bare URL) under the cursor |
 
 *Ordinary keyboard keys* — these work in **every** editor mode, including
 while you're typing, so you don't have to leave insert mode to jump around:
@@ -313,9 +350,10 @@ Notes on the Vim emulation, so nothing surprises you:
   engine treats one character as one column. A tab that arrives by paste is
   kept in the text but *displayed* as a single space, for the same reason.
 - **Counts and text objects are not implemented**: `5j`, `d3w`, `ciw`,
-  `yiw`, `%`, macros, marks, registers other than the default one, and `/`
-  search all do nothing. The motions and operators listed above are the
-  complete set.
+  `yiw`, `%`, macros, and registers other than the default one all do
+  nothing. The motions and operators listed above are the complete set.
+- `/` search is plain-text and smart-case, not regex, and `?` (search
+  backwards) is not bound — use `/` then `N`.
 
 **History view**
 
@@ -342,6 +380,8 @@ any other key closes it.
 | `:new` | `:n` | Start composing a new entry |
 | `:title <text>` | `:name` | Title the entry being edited (no text clears it) |
 | `:done` / `:undone` | | Cross out / un-cross the selection, or the current line |
+| `:link <url>` | `:url` | Make the selection a link (`gx` opens it) |
+| `:unlink` | | Remove the link again |
 | `:history [id]` | `:hist` | Open version history (current entry if `id` omitted) |
 | `:restore <n>` | | Restore version `n` as a new version |
 | `:delete` | `:d` | Delete the selected entry |

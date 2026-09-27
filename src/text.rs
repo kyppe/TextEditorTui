@@ -47,6 +47,9 @@ pub fn remove_before(s: &mut String, char_idx: usize) {
 /// Background used to show the live editor selection.
 const SELECTION_BG: Color = Color::Blue;
 
+/// Background for `/` search hits.
+const SEARCH_BG: Color = Color::Yellow;
+
 /// Character offsets at which a *soft* (wrap-induced) line break falls,
 /// for a viewport `width` columns wide. Breaks after the last space that
 /// fits when there is one, otherwise hard-breaks mid-word.
@@ -97,18 +100,19 @@ pub fn wrap_positions(text: &str, width: usize) -> Vec<usize> {
 /// formatted entry text goes through, so a new `MarkKind` only needs a
 /// `FORMATS` entry to render correctly everywhere.
 pub fn render_lines(text: &str, marks: &[Mark], width: usize) -> Vec<Line<'static>> {
-    render_lines_sel(text, marks, width, None)
+    render_lines_sel(text, marks, width, None, &[])
 }
 
-/// As `render_lines`, plus a highlighted selection range — used by the
-/// editor. Selection is handled here rather than by post-processing the
-/// returned lines so that it can never fall out of step with where the
-/// text actually wrapped.
+/// As `render_lines`, plus the editor's transient overlays: the selection
+/// and the current search hits. Both are handled here rather than by
+/// post-processing the returned lines, so they can't fall out of step with
+/// where the text actually wrapped.
 pub fn render_lines_sel(
     text: &str,
     marks: &[Mark],
     width: usize,
     selection: Option<(usize, usize)>,
+    search: &[(usize, usize)],
 ) -> Vec<Line<'static>> {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
@@ -129,6 +133,10 @@ pub fn render_lines_sel(
     if let Some((s, e)) = selection {
         boundaries.push(s.min(len));
         boundaries.push(e.min(len));
+    }
+    for (s, e) in search {
+        boundaries.push((*s).min(len));
+        boundaries.push((*e).min(len));
     }
     boundaries.sort_unstable();
     boundaries.dedup();
@@ -171,6 +179,10 @@ pub fn render_lines_sel(
                 style = style.patch((crate::format::find_by_kind(m.kind).style)());
             }
         }
+        if search.iter().any(|(s, e)| *s <= a && *e >= b && s != e) {
+            style = style.bg(SEARCH_BG).fg(Color::Black);
+        }
+        // Selection is painted last so it stays visible over a search hit.
         if let Some((s, e)) = selection {
             if s <= a && e >= b && s != e {
                 style = style.bg(SELECTION_BG);
@@ -386,6 +398,113 @@ pub fn trimmed_line_spans(text: &str, start: usize, end: usize) -> Vec<(usize, u
     spans
 }
 
+// --- Search -----------------------------------------------------------
+
+/// Every occurrence of `pattern` in `text`, as character ranges.
+///
+/// Plain substring matching, not regular expressions — this is a note
+/// editor, and `/` is for finding a word you remember typing. Matching is
+/// "smart case", the setting most people give Vim: case-insensitive until
+/// the pattern itself contains a capital, which then makes it exact.
+pub fn find_matches(text: &str, pattern: &str) -> Vec<(usize, usize)> {
+    if pattern.is_empty() {
+        return Vec::new();
+    }
+    let case_sensitive = pattern.chars().any(|c| c.is_uppercase());
+    let fold = |s: &str| {
+        if case_sensitive {
+            s.to_string()
+        } else {
+            s.to_lowercase()
+        }
+    };
+    // Compare character-by-character so the returned offsets are character
+    // offsets, like every other position in this app.
+    let hay: Vec<char> = fold(text).chars().collect();
+    let needle: Vec<char> = fold(pattern).chars().collect();
+    if needle.len() > hay.len() {
+        return Vec::new();
+    }
+
+    let mut hits = Vec::new();
+    let mut i = 0usize;
+    while i + needle.len() <= hay.len() {
+        if hay[i..i + needle.len()] == needle[..] {
+            hits.push((i, i + needle.len()));
+            i += needle.len(); // non-overlapping, as Vim's `n` steps
+        } else {
+            i += 1;
+        }
+    }
+    hits
+}
+
+/// The next match strictly after `from`, wrapping to the first.
+pub fn match_after(hits: &[(usize, usize)], from: usize) -> Option<(usize, usize)> {
+    hits.iter()
+        .find(|(s, _)| *s > from)
+        .or_else(|| hits.first())
+        .copied()
+}
+
+/// The previous match strictly before `from`, wrapping to the last.
+pub fn match_before(hits: &[(usize, usize)], from: usize) -> Option<(usize, usize)> {
+    hits.iter()
+        .rev()
+        .find(|(s, _)| *s < from)
+        .or_else(|| hits.last())
+        .copied()
+}
+
+// --- URLs -------------------------------------------------------------
+
+/// True for text that looks like something a browser could open. Used both
+/// to validate `:link` and to let `gx` work on a bare URL sitting in the
+/// text with no link mark on it.
+pub fn looks_like_url(token: &str) -> bool {
+    let t = token.trim_matches(|c: char| "()[]{}<>,.;:!?\"'".contains(c));
+    if t.is_empty() {
+        return false;
+    }
+    t.starts_with("http://")
+        || t.starts_with("https://")
+        || t.starts_with("mailto:")
+        || t.starts_with("www.")
+        // A bare domain like example.com/foo: something before a dot,
+        // something after it, and no whitespace anywhere.
+        || (t.contains('.')
+            && !t.starts_with('.')
+            && !t.ends_with('.')
+            && !t.contains(char::is_whitespace))
+}
+
+/// The whitespace-delimited token under the cursor, trimmed of the
+/// punctuation that usually surrounds a pasted URL in prose.
+pub fn token_at(text: &str, cursor: usize) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+    let pos = cursor.min(chars.len() - 1);
+    if chars[pos].is_whitespace() {
+        return None;
+    }
+    let mut start = pos;
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    let mut end = pos + 1;
+    while end < chars.len() && !chars[end].is_whitespace() {
+        end += 1;
+    }
+    let token: String = chars[start..end].iter().collect();
+    let trimmed = token
+        .trim_matches(|c: char| "()[]{}<>,;:!?\"'".contains(c))
+        .trim_end_matches('.')
+        .to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 /// Character offset of the start of the last logical line (Vim `G`).
 pub fn last_line_start(text: &str) -> usize {
     let n = char_len(text);
@@ -418,11 +537,7 @@ mod tests {
     #[test]
     fn render_lines_splits_on_newlines_and_applies_marks() {
         let text = "hello\nworld";
-        let marks = vec![Mark {
-            start: 0,
-            end: 5,
-            kind: MarkKind::Italic,
-        }];
+        let marks = vec![Mark::new(0, 5, MarkKind::Italic)];
         let lines = render_lines(text, &marks, 80);
         assert_eq!(lines.len(), 2);
         // The mark must actually reach the rendered span, not just split.
@@ -573,6 +688,49 @@ mod tests {
     }
 
     #[test]
+    fn search_is_smart_case_and_non_overlapping() {
+        let t = "the Cat sat on the cat mat";
+        // Lower-case pattern matches either case.
+        let hits = find_matches(t, "cat");
+        assert_eq!(hits.len(), 2);
+        // A capital in the pattern makes it exact.
+        assert_eq!(find_matches(t, "Cat"), vec![(4, 7)]);
+        // Overlapping repeats step past each match, like Vim's `n`.
+        assert_eq!(find_matches("aaaa", "aa"), vec![(0, 2), (2, 4)]);
+        assert!(find_matches(t, "dog").is_empty());
+        assert!(find_matches(t, "").is_empty());
+    }
+
+    #[test]
+    fn search_stepping_wraps_in_both_directions() {
+        let hits = vec![(2, 5), (10, 13), (20, 23)];
+        assert_eq!(match_after(&hits, 0), Some((2, 5)));
+        assert_eq!(match_after(&hits, 2), Some((10, 13)));
+        // Past the last match, wrap to the first.
+        assert_eq!(match_after(&hits, 25), Some((2, 5)));
+        assert_eq!(match_before(&hits, 20), Some((10, 13)));
+        // Before the first, wrap to the last.
+        assert_eq!(match_before(&hits, 0), Some((20, 23)));
+        assert_eq!(match_after(&[], 0), None);
+    }
+
+    #[test]
+    fn url_detection_and_token_under_cursor() {
+        assert!(looks_like_url("https://example.com"));
+        assert!(looks_like_url("www.example.com"));
+        assert!(looks_like_url("example.com/path"));
+        assert!(!looks_like_url("hello"));
+        assert!(!looks_like_url("two words"));
+
+        let t = "see https://rust-lang.org, it is good";
+        // Cursor inside the URL returns it with the comma stripped.
+        assert_eq!(token_at(t, 10).as_deref(), Some("https://rust-lang.org"));
+        // Cursor on whitespace has no token.
+        assert_eq!(token_at(t, 3), None);
+        assert_eq!(token_at(t, 0).as_deref(), Some("see"));
+    }
+
+    #[test]
     fn remove_range_is_char_indexed() {
         let mut s = String::from("héllo wörld");
         remove_range(&mut s, 0, 6);
@@ -581,7 +739,7 @@ mod tests {
 
     #[test]
     fn selection_is_highlighted_across_a_wrap() {
-        let lines = render_lines_sel("aaa bbb ccc", &[], 4, Some((2, 9)));
+        let lines = render_lines_sel("aaa bbb ccc", &[], 4, Some((2, 9)), &[]);
         let highlighted: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())

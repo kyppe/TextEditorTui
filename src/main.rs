@@ -1,5 +1,6 @@
 mod action;
 mod app;
+mod browser;
 mod clipboard;
 mod command;
 mod entry;

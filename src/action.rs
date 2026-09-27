@@ -349,6 +349,33 @@ pub fn apply(app: &mut App, action: Action) {
         }
         Action::EditorExitTyping => app.editor.typing = false,
 
+        // Search
+        Action::EnterSearch => {
+            app.mode = Mode::Search {
+                input: String::new(),
+                return_to: Box::new(app.mode.clone()),
+            };
+        }
+        Action::SearchInsertChar(c) => {
+            if let Mode::Search { input, .. } = &mut app.mode {
+                input.push(c);
+            }
+        }
+        Action::SearchBackspace => {
+            if let Mode::Search { input, .. } = &mut app.mode {
+                input.pop();
+            }
+        }
+        Action::SearchSubmit => submit_search(app),
+        Action::SearchCancel => {
+            if let Mode::Search { return_to, .. } = &app.mode {
+                app.mode = (**return_to).clone();
+            }
+        }
+        Action::SearchNext => search_step(app, true),
+        Action::SearchPrev => search_step(app, false),
+        Action::OpenLinkUnderCursor => open_link_under_cursor(app),
+
         // Command line
         Action::CommandInsertChar(c) => app.command_input.push(c),
         Action::CommandBackspace => {
@@ -1006,6 +1033,141 @@ pub fn set_done(app: &mut App, done: bool) -> Result<(), String> {
     } else {
         app.set_info("Marked not done — Ctrl+S to save");
     }
+    Ok(())
+}
+
+/// `/` — remember the pattern and jump to the first match at or after the
+/// cursor. The pattern sticks around so `n`/`N` can repeat it and so the
+/// hits stay highlighted.
+fn submit_search(app: &mut App) {
+    let Mode::Search { input, return_to } = app.mode.clone() else {
+        return;
+    };
+    app.mode = *return_to;
+    let pattern = input.trim().to_string();
+    if pattern.is_empty() {
+        app.search = None;
+        return;
+    }
+
+    let hits = text::find_matches(&app.editor.text, &pattern);
+    if hits.is_empty() {
+        app.search = None;
+        app.set_error(format!("Not found: {pattern}"));
+        return;
+    }
+    app.search = Some(pattern);
+    // Start from just before the cursor so a match *at* the cursor counts.
+    let from = app.editor.cursor.saturating_sub(1);
+    if let Some((start, _)) = text::match_after(&hits, from) {
+        app.editor.cursor = start;
+    }
+    app.set_info(format!("{} match(es)", hits.len()));
+}
+
+/// `n` / `N`.
+fn search_step(app: &mut App, forward: bool) {
+    let Some(pattern) = app.search.clone() else {
+        app.set_error("No search yet — press / to search");
+        return;
+    };
+    let hits = text::find_matches(&app.editor.text, &pattern);
+    if hits.is_empty() {
+        app.set_error(format!("Not found: {pattern}"));
+        return;
+    }
+    let found = if forward {
+        text::match_after(&hits, app.editor.cursor)
+    } else {
+        text::match_before(&hits, app.editor.cursor)
+    };
+    if let Some((start, _)) = found {
+        app.editor.cursor = start;
+        let index = hits.iter().position(|h| h.0 == start).unwrap_or(0) + 1;
+        app.set_info(format!("Match {index} of {}", hits.len()));
+    }
+}
+
+/// `gx` — open the link under the cursor in the browser. Falls back to a
+/// bare URL sitting in the text, so a pasted address works without having
+/// been marked with `:link` first (this is what Vim's `gx` does too).
+fn open_link_under_cursor(app: &mut App) {
+    if !matches!(app.mode, Mode::Editor) {
+        app.set_error("`gx` opens a link while editing an entry");
+        return;
+    }
+    let target = app
+        .editor
+        .formatting
+        .link_at(app.editor.cursor)
+        .map(str::to_string)
+        .or_else(|| {
+            text::token_at(&app.editor.text, app.editor.cursor)
+                .filter(|t| text::looks_like_url(t))
+        });
+
+    let Some(target) = target else {
+        app.set_error("No link under the cursor (select text and use :link <url>)");
+        return;
+    };
+    match crate::browser::open(&target) {
+        Ok(url) => app.set_info(format!("Opening {url}")),
+        Err(e) => app.set_error(e),
+    }
+}
+
+/// `:link <url>` — turns the selection into a hyperlink. With no argument,
+/// the selected text is used as its own target, which covers the common case
+/// of having pasted a URL and wanting it clickable.
+pub fn set_link(app: &mut App, arg: &str) -> Result<(), String> {
+    if !matches!(app.mode, Mode::Editor) {
+        return Err("`:link` only works while editing an entry".into());
+    }
+    let Some((start, end)) = app.editor.selection_range().filter(|(s, e)| s != e) else {
+        return Err("Select the text to link first (v or V), then :link <url>".into());
+    };
+    // Trim to the words, like every other mark, so a link never underlines
+    // the blank space around it.
+    let spans = text::trimmed_line_spans(&app.editor.text, start, end);
+    let (Some((first, _)), Some((_, last))) = (spans.first().copied(), spans.last().copied()) else {
+        return Err("Nothing but blank space selected".into());
+    };
+
+    let selected: String = app
+        .editor
+        .text
+        .chars()
+        .skip(first)
+        .take(last - first)
+        .collect();
+    let target = if arg.trim().is_empty() {
+        if !text::looks_like_url(&selected) {
+            return Err("Give the address: :link https://example.com".into());
+        }
+        selected
+    } else {
+        arg.trim().to_string()
+    };
+
+    let url = crate::browser::normalize(&target)?;
+    app.editor.push_undo();
+    app.editor.formatting.set_link(first, last, url.clone());
+    app.set_info(format!("Linked to {url} — gx opens it"));
+    Ok(())
+}
+
+/// `:unlink` — drops the link on the selection, or on the cursor's line.
+pub fn clear_link(app: &mut App) -> Result<(), String> {
+    if !matches!(app.mode, Mode::Editor) {
+        return Err("`:unlink` only works while editing an entry".into());
+    }
+    let (start, end) = match app.editor.selection_range() {
+        Some((s, e)) if s != e => (s, e),
+        _ => text::line_bounds(&app.editor.text, app.editor.cursor),
+    };
+    app.editor.push_undo();
+    app.editor.formatting.clear(start, end, MarkKind::Link);
+    app.set_info("Link removed");
     Ok(())
 }
 

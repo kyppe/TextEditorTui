@@ -145,7 +145,11 @@ pub fn help(frame: &mut Frame, scroll: u16) -> u16 {
     }
     lines.push(heading("Formatting — applies to the selection"));
     for f in crate::format::FORMATS {
-        lines.extend(body(&format!("  :{:<5} {}", f.command, f.name)));
+        // Marks without a plain toggle command (Link) are documented by
+        // their own command above instead.
+        if let Some(cmd) = f.command {
+            lines.extend(body(&format!("  :{:<6} {}", cmd, f.name)));
+        }
     }
 
     let height = (lines.len() as u16 + 2).min(frame.area().height);

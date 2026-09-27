@@ -34,6 +34,18 @@ pub const COMMANDS: &[CommandDef] = &[
         run: |app, args| crate::action::set_title(app, &args.join(" ")),
     },
     CommandDef {
+        name: "link",
+        aliases: &["url"],
+        help: ":link <url> — make the selection a link (gx opens it)",
+        run: |app, args| crate::action::set_link(app, &args.join(" ")),
+    },
+    CommandDef {
+        name: "unlink",
+        aliases: &[],
+        help: ":unlink — remove the link again",
+        run: |app, _args| crate::action::clear_link(app),
+    },
+    CommandDef {
         name: "done",
         aliases: &[],
         help: ":done — cross out the selection, or the current line",

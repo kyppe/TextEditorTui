@@ -41,11 +41,17 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     app.editor_view_height = text_area.height;
 
+    // Search hits stay highlighted after the prompt closes, like `hlsearch`.
+    let hits = match &app.search {
+        Some(pattern) => crate::text::find_matches(&app.editor.text, pattern),
+        None => Vec::new(),
+    };
     let lines = crate::text::render_lines_sel(
         &app.editor.text,
         &app.editor.formatting.marks,
         width,
         app.editor.selection_range(),
+        &hits,
     );
 
     let (cursor_row, cursor_col) =

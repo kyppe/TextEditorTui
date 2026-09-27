@@ -18,6 +18,8 @@ pub enum Mode {
     Editor,
     /// The `:` command line is open; `return_to` is where Enter/Esc goes.
     Command { return_to: Box<Mode> },
+    /// The `/` search prompt, typed the same way as the command line.
+    Search { input: String, return_to: Box<Mode> },
     /// Viewing the version-tab history of one entry (read-only).
     /// `return_to` is where Esc goes back to, so consulting history while
     /// composing an entry doesn't throw the unsaved draft away.
@@ -53,6 +55,7 @@ pub enum ModeKind {
     EditorVisual,
     EditorTyping,
     Command,
+    Search,
     History,
     Confirm,
     Help,
@@ -195,6 +198,9 @@ pub struct App {
     /// Visible height of the editor's text area, recorded by `ui::editor`
     /// each frame so Page Up/Down can jump by a screenful.
     pub editor_view_height: u16,
+    /// The last `/` pattern, kept so `n` and `N` have something to repeat
+    /// and so matches stay highlighted after the prompt closes.
+    pub search: Option<String>,
 }
 
 impl App {
@@ -215,6 +221,7 @@ impl App {
             pending_key: None,
             register: crate::clipboard::Register::default(),
             editor_view_height: 0,
+            search: None,
         }
     }
 
@@ -231,6 +238,7 @@ impl App {
                 }
             }
             Mode::Command { .. } => ModeKind::Command,
+            Mode::Search { .. } => ModeKind::Search,
             Mode::History { .. } => ModeKind::History,
             Mode::Confirm { .. } => ModeKind::Confirm,
             Mode::Help { .. } => ModeKind::Help,

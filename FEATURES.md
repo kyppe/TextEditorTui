@@ -47,6 +47,13 @@ a `pub fn` in `src/action.rs` instead (see "Add a new editor action"
 below) and have `run` call it — that keeps `command.rs` a thin table
 and makes the logic reusable from a keybinding too.
 
+**A mark that carries data?** `MarkKind::Link` is the worked example: the
+payload lives in `Mark::url` (added with `#[serde(default)]`), its `FORMATS`
+entry has `command: None` because a plain toggle can't supply a URL, and it
+gets its own `:link` command plus `Formatting::set_link`/`link_at`. Links
+deliberately don't go through `set`, which merges neighbours — merging two
+links would have to discard one of their URLs.
+
 **Applying a mark over a range?** Two rules:
 
 1. Get the ranges from `action::target_spans`, never from the raw selection.
@@ -111,7 +118,7 @@ say `Strikethrough`:
    ```rust
    FormatDef {
        kind: MarkKind::Strikethrough,
-       command: "strike",
+       command: Some("strike"),   // None if a plain toggle can't express it
        name: "strikethrough",
        style: || Style::default().add_modifier(Modifier::CROSSED_OUT),
    },
