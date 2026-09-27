@@ -9,7 +9,7 @@
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 /// Centers a box of `width` x `height` within `area`.
@@ -24,24 +24,29 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 pub fn confirm(frame: &mut Frame, message: &str) {
-    let area = centered(frame.area(), (message.len() as u16 + 4).clamp(30, 60), 5);
+    let width = (message.chars().count() as u16 + 4).clamp(34, 60);
+    let width = width.min(frame.area().width);
+    let inner_width = width.saturating_sub(2) as usize;
+
+    // Pre-wrapped with the project's own wrapper rather than ratatui's
+    // `Wrap`, so the row count below is exact — a two-line message used to
+    // push the y/n hint out of a fixed-height box.
+    let mut lines = crate::text::render_lines(message, &[], inner_width);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "y / Enter: yes      n / Esc: no",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let height = (lines.len() as u16 + 2).min(frame.area().height);
+    let area = centered(frame.area(), width, height);
+
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Confirm ")
         .style(Style::default().fg(Color::Yellow));
-    let text = vec![
-        Line::from(message.to_string()),
-        Line::from(""),
-        Line::from(Span::styled(
-            "y: yes    n/Esc: no",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(text).block(block).wrap(Wrap { trim: true }),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// The `t` popup: shows the entry's existing title for editing, or an

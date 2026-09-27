@@ -750,11 +750,24 @@ fn cancel_editor(app: &mut App) {
     }
     if app.editor.selection_anchor.is_some() {
         app.editor.clear_selection();
-        app.set_info("Selection cleared — Esc again to exit without saving");
+        app.set_info("Selection cleared — Esc again to leave the editor");
+        return;
+    }
+    // Don't throw away work on a single keystroke: ask, and come back to the
+    // draft untouched if the answer is no.
+    if editor_is_dirty(app) {
+        let what = match &app.editor.entry_id {
+            Some(id) => format!("Close entry {id} without saving?"),
+            None => "Discard this new entry without saving?".to_string(),
+        };
+        app.mode = Mode::Confirm {
+            message: format!("{what} Your changes will be lost."),
+            action: ConfirmAction::DiscardDraft,
+            return_to: Box::new(Mode::Editor),
+        };
         return;
     }
     leave_editor(app);
-    app.set_info("Left editor — unsaved changes discarded");
 }
 
 /// Returns to the journal and drops the editing buffer, so no stale text
@@ -795,6 +808,10 @@ fn confirm_yes(app: &mut App) {
                 app.set_info("Entry deleted");
             }
             app.mode = Mode::Normal;
+        }
+        ConfirmAction::DiscardDraft => {
+            leave_editor(app);
+            app.set_info("Closed without saving");
         }
     }
 }

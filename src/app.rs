@@ -8,6 +8,9 @@ use crate::store::Store;
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
     DeleteEntry(EntryId),
+    /// Leaving the editor with unsaved changes — `Esc` asks before throwing
+    /// a draft away.
+    DiscardDraft,
 }
 
 #[derive(Debug, Clone)]

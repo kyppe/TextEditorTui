@@ -98,6 +98,11 @@ shell's own cursor is restored when TextPoppup exits.
 - Press `H` to view an entry's full version history.
 - Press `:` at any time for a command line.
 
+Nothing is thrown away on a single keystroke: pressing `Esc` to leave the
+editor with unsaved changes asks *"Close without saving?"* first — `y` or
+`Enter` discards, `n` or `Esc` puts you back in the draft exactly where you
+were.
+
 ### Titling an entry
 
 From the journal list, select an entry and press **`t`**. A small popup
@@ -362,7 +367,7 @@ and paste in a browser, or the other way round.
 | `Ctrl+S`, `:wq` | Save as a new version and close |
 | `:w` | Save and keep editing |
 | `:q` / `:q!` | Close (refuses unsaved work) / close discarding changes |
-| `Esc` | Clear selection, then leave the editor (unsaved changes discarded) |
+| `Esc` | Clear selection, then leave the editor — asks first if there are unsaved changes |
 | `H` | Open history for the entry being edited |
 | `:` | Command line |
 
