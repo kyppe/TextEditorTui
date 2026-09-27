@@ -28,6 +28,9 @@ pub enum MarkKind {
     Strikethrough,
     /// Text pointing at a URL, carried in `Mark::url`. Opened with `gx`.
     Link,
+    /// Text pointing at another entry in this journal, carried in
+    /// `Mark::entry`. `gx` jumps to it instead of opening a browser.
+    EntryLink,
 }
 
 /// A formatting mark applied to a `[start, end)` range of *character*
@@ -42,6 +45,12 @@ pub struct Mark {
     /// loading, and skipping it when empty keeps the file tidy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Which entry a `MarkKind::EntryLink` points at. Kept as its own
+    /// field rather than squeezed into `url` behind a fake scheme, so a
+    /// cross-reference is obviously an entry id and journals written
+    /// before entry links keep loading untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<EntryId>,
 }
 
 impl Mark {
@@ -51,6 +60,7 @@ impl Mark {
             end,
             kind,
             url: None,
+            entry: None,
         }
     }
 }
@@ -95,22 +105,56 @@ impl Formatting {
         if start >= end {
             return;
         }
-        self.marks
-            .retain(|m| m.kind != MarkKind::Link || m.end <= start || m.start >= end);
+        self.replace_links_over(start, end);
         self.marks.push(Mark {
             start,
             end,
             kind: MarkKind::Link,
             url: Some(url),
+            entry: None,
         });
     }
 
-    /// The URL of the link covering character `pos`, if there is one.
+    /// Points `[start, end)` at another entry — a cross-reference. Like
+    /// `set_link`, it replaces any link already covering that text, so a
+    /// span is never both a web link and an entry link at once.
+    pub fn set_entry_link(&mut self, start: usize, end: usize, entry: EntryId) {
+        if start >= end {
+            return;
+        }
+        self.replace_links_over(start, end);
+        self.marks.push(Mark {
+            start,
+            end,
+            kind: MarkKind::EntryLink,
+            url: None,
+            entry: Some(entry),
+        });
+    }
+
+    /// Drops every link of either kind overlapping `[start, end)`.
+    fn replace_links_over(&mut self, start: usize, end: usize) {
+        self.marks.retain(|m| {
+            !matches!(m.kind, MarkKind::Link | MarkKind::EntryLink)
+                || m.end <= start
+                || m.start >= end
+        });
+    }
+
+    /// The URL of the web link covering character `pos`, if there is one.
     pub fn link_at(&self, pos: usize) -> Option<&str> {
         self.marks
             .iter()
             .find(|m| m.kind == MarkKind::Link && m.start <= pos && m.end > pos)
             .and_then(|m| m.url.as_deref())
+    }
+
+    /// The entry id the cross-reference covering `pos` points at.
+    pub fn entry_link_at(&self, pos: usize) -> Option<&str> {
+        self.marks
+            .iter()
+            .find(|m| m.kind == MarkKind::EntryLink && m.start <= pos && m.end > pos)
+            .and_then(|m| m.entry.as_deref())
     }
 
     /// Removes `kind` from `[start, end)`, trimming or splitting marks
@@ -133,6 +177,7 @@ impl Formatting {
                     end: start,
                     kind,
                     url: m.url.clone(),
+                    entry: m.entry.clone(),
                 });
             }
             if m.end > end {
@@ -141,6 +186,7 @@ impl Formatting {
                     end: m.end,
                     kind,
                     url: m.url.clone(),
+                    entry: m.entry.clone(),
                 });
             }
         }
@@ -210,6 +256,22 @@ impl Entry {
     /// The current version's title, if it has one.
     pub fn title(&self) -> Option<&str> {
         self.current().title.as_deref()
+    }
+
+    /// How to name this entry in a list: its title, or failing that the
+    /// first non-blank line of its text. Entries often have no title, so a
+    /// picker needs something to show either way.
+    pub fn label(&self) -> String {
+        if let Some(t) = self.title() {
+            return t.to_string();
+        }
+        self.current()
+            .text
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("(empty)")
+            .to_string()
     }
 
     /// The latest (current) version. An entry always has at least one
@@ -403,6 +465,48 @@ mod tests {
         assert_eq!(f.link_at(2), Some("https://d.test"));
         assert_eq!(f.link_at(8), Some("https://d.test"));
         assert_eq!(f.link_at(5), None);
+    }
+
+    #[test]
+    fn entry_links_point_at_an_entry_and_exclude_web_links() {
+        let mut f = Formatting::default();
+        f.set_entry_link(0, 9, "a83f2c".into());
+        assert_eq!(f.entry_link_at(3), Some("a83f2c"));
+        // Not a web link, so `gx`'s URL path must not pick it up.
+        assert_eq!(f.link_at(3), None);
+
+        // Re-targeting the same text replaces it rather than stacking.
+        f.set_entry_link(0, 9, "f71d92".into());
+        assert_eq!(f.marks.len(), 1);
+        assert_eq!(f.entry_link_at(3), Some("f71d92"));
+
+        // A web link over the same text takes it over completely.
+        f.set_link(0, 9, "https://x.test".into());
+        assert_eq!(f.marks.len(), 1);
+        assert_eq!(f.entry_link_at(3), None);
+        assert_eq!(f.link_at(3), Some("https://x.test"));
+    }
+
+    #[test]
+    fn label_falls_back_to_the_first_line_when_untitled() {
+        let titled = Entry::new(
+            "a".into(),
+            Some("Project X".into()),
+            "some description".into(),
+            Formatting::default(),
+        );
+        assert_eq!(titled.label(), "Project X");
+
+        let untitled = Entry::new(
+            "b".into(),
+            None,
+            "\n   first real line\nsecond".into(),
+            Formatting::default(),
+        );
+        assert_eq!(untitled.label(), "first real line");
+
+        let empty = Entry::new("c".into(), None, String::new(), Formatting::default());
+        assert_eq!(empty.label(), "(empty)");
     }
 
     /// A pre-link journal has no `url` field at all; it must still load.

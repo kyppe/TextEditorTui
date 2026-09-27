@@ -40,9 +40,15 @@ pub const COMMANDS: &[CommandDef] = &[
         run: |app, args| crate::action::set_link(app, &args.join(" ")),
     },
     CommandDef {
+        name: "goto",
+        aliases: &["ref"],
+        help: ":goto — link the selection to another entry (gx jumps to it)",
+        run: |app, _args| crate::action::open_goto_prompt(app),
+    },
+    CommandDef {
         name: "unlink",
         aliases: &[],
-        help: ":unlink — remove the link again",
+        help: ":unlink — remove the link or cross-reference again",
         run: |app, _args| crate::action::clear_link(app),
     },
     CommandDef {

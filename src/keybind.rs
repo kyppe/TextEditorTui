@@ -100,8 +100,21 @@ pub enum Action {
     SearchCancel,
     SearchNext,
     SearchPrev,
-    /// `gx` — open the link under the cursor.
+    /// `gx` — open the link under the cursor: a web link in the browser, a
+    /// cross-reference by jumping to that entry.
     OpenLinkUnderCursor,
+
+    // --- `:goto` entry picker ---
+    GotoInsertChar(char),
+    GotoBackspace,
+    GotoUp,
+    GotoDown,
+    GotoSubmit,
+    GotoCancel,
+
+    // --- Reordering the journal ---
+    MoveEntryUp,
+    MoveEntryDown,
 
     // --- Command line ---
     CommandInsertChar(char),
@@ -199,6 +212,10 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
     match mode {
         ModeKind::Normal => match key.code {
             KeyCode::Char('q') => Action::RequestQuit,
+            // Guarded arms first: a plain `Up`/`Down` arm below would
+            // otherwise match these and make them unreachable.
+            KeyCode::Up if ctrl => Action::MoveEntryUp,
+            KeyCode::Down if ctrl => Action::MoveEntryDown,
             KeyCode::Char('j') | KeyCode::Down => Action::SelectDown,
             KeyCode::Char('k') | KeyCode::Up => Action::SelectUp,
             KeyCode::Char('g') => Action::SetPending('g'),
@@ -207,6 +224,8 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::End => Action::SelectLast,
             KeyCode::PageUp => Action::SelectPageUp,
             KeyCode::PageDown => Action::SelectPageDown,
+            KeyCode::Char('K') => Action::MoveEntryUp,
+            KeyCode::Char('J') => Action::MoveEntryDown,
             KeyCode::Char('n') | KeyCode::Char('o') => Action::NewEntry,
             KeyCode::Char('i') | KeyCode::Enter => Action::EditSelected,
             KeyCode::Char('d') => Action::DeleteSelected,
@@ -319,6 +338,18 @@ pub fn resolve(mode: ModeKind, key: KeyEvent, pending: Option<char>) -> Action {
             KeyCode::Esc => Action::SearchCancel,
             KeyCode::Backspace => Action::SearchBackspace,
             KeyCode::Char(c) if !ctrl && !alt => Action::SearchInsertChar(c),
+            _ => Action::NoOp,
+        },
+
+        ModeKind::GotoPrompt => match key.code {
+            KeyCode::Enter => Action::GotoSubmit,
+            KeyCode::Esc => Action::GotoCancel,
+            KeyCode::Backspace => Action::GotoBackspace,
+            KeyCode::Up | KeyCode::BackTab => Action::GotoUp,
+            KeyCode::Down | KeyCode::Tab => Action::GotoDown,
+            KeyCode::Char('p') if ctrl => Action::GotoUp,
+            KeyCode::Char('n') if ctrl => Action::GotoDown,
+            KeyCode::Char(c) if !ctrl && !alt => Action::GotoInsertChar(c),
             _ => Action::NoOp,
         },
 

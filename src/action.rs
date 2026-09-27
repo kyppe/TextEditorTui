@@ -376,6 +376,52 @@ pub fn apply(app: &mut App, action: Action) {
         Action::SearchPrev => search_step(app, false),
         Action::OpenLinkUnderCursor => open_link_under_cursor(app),
 
+        // `:goto` entry picker
+        Action::GotoInsertChar(c) => {
+            if let Mode::GotoPrompt {
+                query, highlighted, ..
+            } = &mut app.mode
+            {
+                query.push(c);
+                // The list shrinks as you type, so start from the top again
+                // rather than leaving the highlight past the end.
+                *highlighted = 0;
+            }
+        }
+        Action::GotoBackspace => {
+            if let Mode::GotoPrompt {
+                query, highlighted, ..
+            } = &mut app.mode
+            {
+                query.pop();
+                *highlighted = 0;
+            }
+        }
+        Action::GotoUp => {
+            if let Mode::GotoPrompt { highlighted, .. } = &mut app.mode {
+                *highlighted = highlighted.saturating_sub(1);
+            }
+        }
+        Action::GotoDown => {
+            let count = match &app.mode {
+                Mode::GotoPrompt { query, .. } => app.goto_candidates(query).len(),
+                _ => 0,
+            };
+            if let Mode::GotoPrompt { highlighted, .. } = &mut app.mode {
+                *highlighted = (*highlighted + 1).min(count.saturating_sub(1));
+            }
+        }
+        Action::GotoSubmit => submit_goto_prompt(app),
+        Action::GotoCancel => {
+            if let Mode::GotoPrompt { return_to, .. } = &app.mode {
+                app.mode = (**return_to).clone();
+            }
+        }
+
+        // Reordering the journal
+        Action::MoveEntryUp => move_entry(app, -1),
+        Action::MoveEntryDown => move_entry(app, 1),
+
         // Command line
         Action::CommandInsertChar(c) => app.command_input.push(c),
         Action::CommandBackspace => {
@@ -1096,6 +1142,18 @@ fn open_link_under_cursor(app: &mut App) {
         app.set_error("`gx` opens a link while editing an entry");
         return;
     }
+    // A cross-reference wins over a web link: it's the more specific mark,
+    // and the two can't overlap anyway (see `Formatting::set_entry_link`).
+    if let Some(id) = app
+        .editor
+        .formatting
+        .entry_link_at(app.editor.cursor)
+        .map(str::to_string)
+    {
+        goto_entry(app, &id);
+        return;
+    }
+
     let target = app
         .editor
         .formatting
@@ -1114,6 +1172,108 @@ fn open_link_under_cursor(app: &mut App) {
         Ok(url) => app.set_info(format!("Opening {url}")),
         Err(e) => app.set_error(e),
     }
+}
+
+/// `:goto` — opens the picker so the selected text can point at another
+/// entry. The text range is captured now, because the picker takes over the
+/// keyboard and the selection would otherwise be gone by the time you
+/// choose a target.
+pub fn open_goto_prompt(app: &mut App) -> Result<(), String> {
+    if !matches!(app.mode, Mode::Editor) {
+        return Err("`:goto` only works while editing an entry".into());
+    }
+    let spans = target_spans(app)?;
+    if app.editor.selection_range().filter(|(s, e)| s != e).is_none() {
+        return Err("Select the text to link first (v or V), then :goto".into());
+    }
+    let (first, _) = spans.first().copied().expect("target_spans is non-empty");
+    let (_, last) = spans.last().copied().expect("target_spans is non-empty");
+
+    if app.goto_candidates("").is_empty() {
+        return Err("No other entries to link to yet".into());
+    }
+    app.mode = Mode::GotoPrompt {
+        query: String::new(),
+        highlighted: 0,
+        range: (first, last),
+        return_to: Box::new(app.mode.clone()),
+    };
+    Ok(())
+}
+
+/// Enter in the picker: attach the highlighted entry to the captured range.
+fn submit_goto_prompt(app: &mut App) {
+    let Mode::GotoPrompt {
+        query,
+        highlighted,
+        range,
+        return_to,
+    } = app.mode.clone()
+    else {
+        return;
+    };
+    let candidates = app.goto_candidates(&query);
+    let Some(&index) = candidates.get(highlighted) else {
+        app.set_error("No entry matches that filter");
+        return;
+    };
+    let Some(entry) = app.store.entries.get(index) else {
+        return;
+    };
+    let (id, label) = (entry.id.clone(), entry.label());
+
+    app.mode = *return_to;
+    app.editor.push_undo();
+    app.editor
+        .formatting
+        .set_entry_link(range.0, range.1, id.clone());
+    app.editor.clear_selection();
+    app.set_info(format!("Linked to [{id}] {label} — gx jumps to it"));
+}
+
+/// `gx` on a cross-reference: open that entry in the editor, so you can keep
+/// reading (and `gx` onward from there).
+fn goto_entry(app: &mut App, id: &str) {
+    let Some(index) = app.store.index_of(id) else {
+        app.set_error(format!("That entry no longer exists (id {id})"));
+        return;
+    };
+    // Jumping away would abandon a draft, so insist on saving first — the
+    // same rule `:q` follows.
+    if editor_is_dirty(app) {
+        app.set_error("Unsaved changes — `:w` to save before jumping");
+        return;
+    }
+    app.selected = index;
+    edit_selected(app);
+    let label = app
+        .store
+        .entries
+        .get(index)
+        .map(|e| e.label())
+        .unwrap_or_default();
+    app.set_info(format!("Jumped to [{id}] {label}"));
+}
+
+/// `J` / `K` (and Ctrl+Down/Up) in the journal: move the selected entry
+/// within the list. The list order *is* the stored order, so this is a swap
+/// in `store.entries` followed by a save.
+fn move_entry(app: &mut App, delta: i32) {
+    let len = app.store.entries.len();
+    if len < 2 {
+        return;
+    }
+    let from = app.selected;
+    let to = from as i32 + delta;
+    if to < 0 || to as usize >= len {
+        return;
+    }
+    let to = to as usize;
+    app.store.entries.swap(from, to);
+    // Keep the selection on the entry that moved, not on the position.
+    app.selected = to;
+    app.save_store();
+    app.set_info(format!("Moved entry to position {} of {len}", to + 1));
 }
 
 /// `:link <url>` — turns the selection into a hyperlink. With no argument,
@@ -1167,6 +1327,9 @@ pub fn clear_link(app: &mut App) -> Result<(), String> {
     };
     app.editor.push_undo();
     app.editor.formatting.clear(start, end, MarkKind::Link);
+    app.editor
+        .formatting
+        .clear(start, end, MarkKind::EntryLink);
     app.set_info("Link removed");
     Ok(())
 }

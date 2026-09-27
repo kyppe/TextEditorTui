@@ -23,6 +23,7 @@ fn base_mode(mode: &Mode) -> &Mode {
     match mode {
         Mode::Command { return_to } => base_mode(return_to),
         Mode::Search { return_to, .. } => base_mode(return_to),
+        Mode::GotoPrompt { return_to, .. } => base_mode(return_to),
         Mode::Confirm { return_to, .. } => base_mode(return_to),
         Mode::Help { return_to, .. } => base_mode(return_to),
         Mode::TitlePrompt { return_to, .. } => base_mode(return_to),
@@ -52,6 +53,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Help { scroll, .. } => {
             app.help_max_scroll = popup::help(frame, scroll);
         }
+        Mode::GotoPrompt {
+            query, highlighted, ..
+        } => popup::goto_prompt(frame, app, &query, highlighted),
         Mode::TitlePrompt {
             entry_id, input, ..
         } => {
@@ -73,6 +77,7 @@ fn mode_badge(app: &App) -> (&'static str, Color) {
     match &app.mode {
         Mode::Command { .. } => ("COMMAND", Color::Yellow),
         Mode::Search { .. } => ("SEARCH", Color::Yellow),
+        Mode::GotoPrompt { .. } => ("GOTO", Color::Rgb(126, 224, 205)),
         Mode::History { .. } => ("HISTORY", Color::Cyan),
         Mode::Help { .. } => ("HELP", Color::Cyan),
         Mode::Confirm { .. } => ("CONFIRM", Color::Red),
@@ -128,7 +133,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         ));
     } else {
         let hint = match base_mode(&app.mode) {
-            Mode::Normal => "j/k gg/G move · i edit · n new · t title · d delete · H history · ? help",
+            Mode::Normal => "j/k move · J/K reorder · i edit · n new · t title · d delete · H history · ?",
             Mode::Editor => {
                 if app.editor.typing {
                     "Esc: normal mode · Tab: indent · Ctrl+S: save & exit"

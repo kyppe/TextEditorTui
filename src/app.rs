@@ -20,6 +20,14 @@ pub enum Mode {
     Command { return_to: Box<Mode> },
     /// The `/` search prompt, typed the same way as the command line.
     Search { input: String, return_to: Box<Mode> },
+    /// `:goto` — pick another entry to cross-reference. Lists every entry,
+    /// filtered as you type; `range` is the draft text that becomes the link.
+    GotoPrompt {
+        query: String,
+        highlighted: usize,
+        range: (usize, usize),
+        return_to: Box<Mode>,
+    },
     /// Viewing the version-tab history of one entry (read-only).
     /// `return_to` is where Esc goes back to, so consulting history while
     /// composing an entry doesn't throw the unsaved draft away.
@@ -56,6 +64,7 @@ pub enum ModeKind {
     EditorTyping,
     Command,
     Search,
+    GotoPrompt,
     History,
     Confirm,
     Help,
@@ -206,11 +215,11 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         let store = Store::load();
-        let selected = store.entries.len().saturating_sub(1);
         App {
             store,
             mode: Mode::Normal,
-            selected,
+            // Start at the top of the journal, scrolled up.
+            selected: 0,
             editor: EditorState::empty(),
             command_input: String::new(),
             status: None,
@@ -223,6 +232,30 @@ impl App {
             editor_view_height: 0,
             search: None,
         }
+    }
+
+    /// Entries offered by the `:goto` picker for `query`, as indices into
+    /// `store.entries`. Matches an id or a label (title, else first line),
+    /// case-insensitively. The entry being edited is left out — linking a
+    /// note to itself does nothing useful.
+    ///
+    /// The picker's renderer and its Enter handler both call this, so the
+    /// row you see highlighted is always the row that gets linked.
+    pub fn goto_candidates(&self, query: &str) -> Vec<usize> {
+        let q = query.trim().to_lowercase();
+        let editing = self.editor.entry_id.as_deref();
+        self.store
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| Some(e.id.as_str()) != editing)
+            .filter(|(_, e)| {
+                q.is_empty()
+                    || e.id.to_lowercase().contains(&q)
+                    || e.label().to_lowercase().contains(&q)
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 
     pub fn mode_kind(&self) -> ModeKind {
@@ -239,6 +272,7 @@ impl App {
             }
             Mode::Command { .. } => ModeKind::Command,
             Mode::Search { .. } => ModeKind::Search,
+            Mode::GotoPrompt { .. } => ModeKind::GotoPrompt,
             Mode::History { .. } => ModeKind::History,
             Mode::Confirm { .. } => ModeKind::Confirm,
             Mode::Help { .. } => ModeKind::Help,

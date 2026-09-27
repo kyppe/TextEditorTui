@@ -72,14 +72,17 @@ popup rather than an ordinary terminal window.
 
 ## Basic usage
 
-TextPoppup opens into the **journal view**: every entry you've written,
-oldest first, each showing its ID, creation timestamp, and current
-text.
+TextPoppup opens into the **journal view**, scrolled to the top: every entry
+you've written, each showing its ID, creation timestamp, and current text.
+
+The list starts in the order entries were created, and you can rearrange it
+yourself with `J`/`K` (or `Ctrl+↓`/`Ctrl+↑`) — the order is saved with your
+journal.
 
 The bottom-left corner always shows which mode you're in, and therefore
 which keys are live: `JOURNAL` (browsing the list), `NORMAL` / `INSERT` /
-`VISUAL` (in the editor), plus `COMMAND`, `SEARCH`, `HISTORY`, `TITLE`,
-`HELP` and `CONFIRM`. The rest of that line is a hint for the current mode, or the
+`VISUAL` (in the editor), plus `COMMAND`, `SEARCH`, `GOTO`, `HISTORY`,
+`TITLE`, `HELP` and `CONFIRM`. The rest of that line is a hint for the current mode, or the
 last status message.
 
 The **cursor shape** follows suit, like Vim: a thin bar while you're typing
@@ -164,6 +167,28 @@ Only `http`, `https` and `mailto` links will open — a journal file is just
 JSON that could have come from anywhere, so anything more exotic is refused
 rather than handed to a protocol handler.
 
+### Cross-references between entries
+
+Notes that refer to each other can link to each other. Select the words that
+name another entry — say `Project X` in `Project X : some description` — and
+run:
+
+```
+:goto
+```
+
+A picker opens listing **every entry with its id and title** (untitled
+entries show their first line). Type to filter by either — `Project`, or
+`aa1111` — use `↑`/`↓` to choose, and press Enter. The text turns teal and
+underlined.
+
+From then on **`gx`** on that text jumps straight into the referenced entry,
+where you can `gx` onward again. `:unlink` removes the reference.
+
+Two safeguards: jumping refuses to abandon an unsaved draft (save with `:w`
+first), and if the target entry has since been deleted you get *"That entry
+no longer exists"* rather than silence.
+
 ### Searching
 
 Press **`/`** in the editor, type, and press Enter. **`n`** goes to the next
@@ -244,6 +269,7 @@ no way to accidentally edit an old version.
 | `j`/`k`, `↑`/`↓` | Move selection |
 | `gg` / `G`, `Home` / `End` | Jump to first / last entry |
 | `Page Up` / `Page Down` | Move 5 entries |
+| `J` / `K` (or `Ctrl+↓`/`Ctrl+↑`) | Move the selected entry down / up in the list |
 | `n`, `o` | New entry |
 | `i`, `Enter` | Edit selected entry |
 | `t` | Title / retitle selected entry (popup) |
@@ -279,7 +305,7 @@ left unnumbered, and the cursor's line number is highlighted.
 | `0` / `^` / `$` | Line start / first non-blank / line end |
 | `/` then Enter | Search |
 | `n` / `N` | Next / previous match |
-| `gx` | Open the link (or bare URL) under the cursor |
+| `gx` | Follow the link under the cursor — web link, bare URL, or a jump to the referenced entry |
 
 *Ordinary keyboard keys* — these work in **every** editor mode, including
 while you're typing, so you don't have to leave insert mode to jump around:
@@ -380,7 +406,8 @@ any other key closes it.
 | `:new` | `:n` | Start composing a new entry |
 | `:title <text>` | `:name` | Title the entry being edited (no text clears it) |
 | `:done` / `:undone` | | Cross out / un-cross the selection, or the current line |
-| `:link <url>` | `:url` | Make the selection a link (`gx` opens it) |
+| `:link <url>` | `:url` | Make the selection a web link (`gx` opens it) |
+| `:goto` | `:ref` | Link the selection to another entry (`gx` jumps to it) |
 | `:unlink` | | Remove the link again |
 | `:history [id]` | `:hist` | Open version history (current entry if `id` omitted) |
 | `:restore <n>` | | Restore version `n` as a new version |

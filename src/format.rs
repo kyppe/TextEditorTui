@@ -82,6 +82,19 @@ pub const FORMATS: &[FormatDef] = &[
         },
     },
     FormatDef {
+        kind: MarkKind::EntryLink,
+        // Set by `:goto`, which needs to pick a target entry, so there is no
+        // plain toggle for it either. Teal keeps a cross-reference visually
+        // distinct from a web link's blue.
+        command: None,
+        name: "entry link",
+        style: || {
+            Style::default()
+                .fg(Color::Rgb(126, 224, 205))
+                .add_modifier(Modifier::UNDERLINED)
+        },
+    },
+    FormatDef {
         kind: MarkKind::Heading,
         command: Some("head"),
         name: "heading",

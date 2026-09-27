@@ -47,7 +47,12 @@ a `pub fn` in `src/action.rs` instead (see "Add a new editor action"
 below) and have `run` call it — that keeps `command.rs` a thin table
 and makes the logic reusable from a keybinding too.
 
-**A mark that carries data?** `MarkKind::Link` is the worked example: the
+**A mark that carries data?** `MarkKind::Link` (a URL in `Mark::url`) and
+`MarkKind::EntryLink` (an entry id in `Mark::entry`) are the worked examples.
+Both fields are `#[serde(default)]` and skipped when empty, so older journals
+load untouched, and both kinds go through `Formatting::set_link` /
+`set_entry_link`, which call `replace_links_over` so a span can never be two
+kinds of link at once. Details: the
 payload lives in `Mark::url` (added with `#[serde(default)]`), its `FORMATS`
 entry has `command: None` because a plain toggle can't supply a URL, and it
 gets its own `:link` command plus `Formatting::set_link`/`link_at`. Links
@@ -207,6 +212,12 @@ a behavior only needs to be written once.
    the point of the shared `Action` layer.
 
 ## Add a new UI popup
+
+**A popup that picks from a list?** `Mode::GotoPrompt` is the example to copy.
+The important part isn't the drawing: the candidate list lives in one function
+(`App::goto_candidates`) that *both* the renderer and the Enter handler call,
+so the row the user sees highlighted is necessarily the row that gets used.
+Don't filter the list twice.
 
 Follow the pattern `Mode::Confirm` and `Mode::Help` already use:
 
